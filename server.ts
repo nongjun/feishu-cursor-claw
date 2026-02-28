@@ -177,7 +177,9 @@ const scheduler = new Scheduler({
 	onExecute: async (job: CronJob) => {
 		try {
 			const ws = job.workspace || defaultWorkspace;
+			memory?.appendSessionLog(ws, "user", `[定时任务:${job.name}] ${job.message}`, config.CURSOR_MODEL);
 			const { result } = await runAgent(ws, job.message);
+			memory?.appendSessionLog(ws, "assistant", result.slice(0, 3000), config.CURSOR_MODEL);
 			return { status: "ok" as const, result };
 		} catch (err) {
 			return { status: "error" as const, error: err instanceof Error ? err.message : String(err) };
@@ -206,7 +208,9 @@ const heartbeat = new HeartbeatRunner({
 		workspaceDir: defaultWorkspace,
 	},
 	onExecute: async (prompt: string) => {
+		memory?.appendSessionLog(defaultWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);
 		const { result } = await runAgent(defaultWorkspace, prompt);
+		memory?.appendSessionLog(defaultWorkspace, "assistant", result.slice(0, 3000), config.CURSOR_MODEL);
 		return result;
 	},
 	onDelivery: async (content: string) => {

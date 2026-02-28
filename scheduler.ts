@@ -47,13 +47,16 @@ export type CronStoreFile = {
 };
 
 // ── 最小 cron 表达式解析器 ────────────────────────
-type CronField = { kind: "all" } | { kind: "step"; step: number } | { kind: "list"; values: number[] };
+type CronField = { kind: "all" } | { kind: "list"; values: number[] };
 
 function parseField(field: string, min: number, max: number): CronField {
 	if (field === "*") return { kind: "all" };
 	if (field.startsWith("*/")) {
 		const step = Number.parseInt(field.slice(2), 10);
-		return Number.isNaN(step) || step <= 0 ? { kind: "all" } : { kind: "step", step };
+		if (Number.isNaN(step) || step <= 0) return { kind: "all" };
+		const values: number[] = [];
+		for (let v = min; v <= max; v += step) values.push(v);
+		return { kind: "list", values };
 	}
 	const values: number[] = [];
 	for (const part of field.split(",")) {
@@ -74,7 +77,6 @@ function parseField(field: string, min: number, max: number): CronField {
 
 function fieldMatches(f: CronField, value: number): boolean {
 	if (f.kind === "all") return true;
-	if (f.kind === "step") return value % f.step === 0;
 	return f.values.includes(value);
 }
 
@@ -92,7 +94,7 @@ function dateComponents(d: Date, tz?: string): [min: number, hr: number, dom: nu
 	}
 }
 
-/** Brute-force: scan next 2880 minutes (48h) for first match. */
+/** Brute-force: scan next 366 days for first match. */
 function nextCronOccurrence(expr: string, fromMs: number, tz?: string): number | undefined {
 	const parts = expr.trim().split(/\s+/);
 	if (parts.length < 5) return undefined;
@@ -104,7 +106,8 @@ function nextCronOccurrence(expr: string, fromMs: number, tz?: string): number |
 	start.setSeconds(0, 0);
 	start.setMinutes(start.getMinutes() + 1);
 
-	for (let i = 0; i < 2880; i++) {
+	const SCAN_MINUTES = 366 * 24 * 60;
+	for (let i = 0; i < SCAN_MINUTES; i++) {
 		const candidate = new Date(start.getTime() + i * 60_000);
 		const c = dateComponents(candidate, tz);
 		if (c.every((v, idx) => fieldMatches(fields[idx], v))) return candidate.getTime();
@@ -121,9 +124,10 @@ function computeNextRun(job: CronJob, now: number): number | undefined {
 			return Number.isNaN(ts) || ts <= now ? undefined : ts;
 		}
 		case "every": {
+			const interval = Math.max(60_000, schedule.everyMs); // minimum 1 minute
 			const base = state.lastRunAtMs || now;
-			const next = base + schedule.everyMs;
-			return next <= now ? now + 1000 : next;
+			const next = base + interval;
+			return next <= now ? now + interval : next;
 		}
 		case "cron":
 			return nextCronOccurrence(schedule.expr, now, schedule.tz);
@@ -147,6 +151,7 @@ export class Scheduler {
 	private opts: SchedulerOpts;
 	private running = false;
 	private saving = false;
+	private lastSaveTime = 0;
 	private log: (msg: string) => void;
 
 	constructor(opts: SchedulerOpts) {
@@ -159,8 +164,12 @@ export class Scheduler {
 		this.running = true;
 		await this.loadFromDisk();
 		this.reschedule();
+		let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 		watchFile(this.opts.storePath, { interval: 2000 }, () => {
-			this.reload().catch((e) => this.log(`文件监听 reload 失败: ${e}`));
+			if (reloadTimer) clearTimeout(reloadTimer);
+			reloadTimer = setTimeout(() => {
+				this.reload().catch((e) => this.log(`监听重载失败: ${e}`));
+			}, 500);
 		});
 		this.log(`已启动，${this.jobs.size} 个任务`);
 	}
@@ -176,6 +185,7 @@ export class Scheduler {
 	}
 
 	async reload(): Promise<void> {
+		if (Date.now() - this.lastSaveTime < 3000) return; // ignore self-triggered watch events
 		const prev = new Map(this.jobs);
 		await this.loadFromDisk();
 
@@ -273,8 +283,11 @@ export class Scheduler {
 
 		if (!nearestJob || nearestMs === Infinity) return;
 
-		const delayMs = Math.max(0, nearestMs - Date.now());
-		this.timer = setTimeout(() => this.tick(), delayMs);
+		const MAX_TIMEOUT = 2_147_483_647; // 2^31 - 1, setTimeout max
+		const delayMs = Math.min(Math.max(0, nearestMs - Date.now()), MAX_TIMEOUT);
+		this.timer = setTimeout(() => {
+			this.tick().catch((e) => this.log(`tick 异常: ${e}`));
+		}, delayMs);
 		this.timer.unref();
 	}
 
@@ -347,8 +360,14 @@ export class Scheduler {
 
 	private async loadFromDisk(): Promise<void> {
 		if (!existsSync(this.opts.storePath)) {
-			this.jobs.clear();
-			return;
+			const bakPath = this.opts.storePath + ".bak";
+			if (existsSync(bakPath)) {
+				this.log("主文件丢失，从备份恢复");
+				renameSync(bakPath, this.opts.storePath);
+			} else {
+				this.jobs.clear();
+				return;
+			}
 		}
 		try {
 			const raw = readFileSync(this.opts.storePath, "utf-8");
@@ -387,6 +406,7 @@ export class Scheduler {
 				try { renameSync(this.opts.storePath, bakPath); } catch {}
 			}
 			renameSync(tmpPath, this.opts.storePath);
+			this.lastSaveTime = Date.now();
 		} catch (err) {
 			this.log(`保存失败: ${err instanceof Error ? err.message : err}`);
 		} finally {

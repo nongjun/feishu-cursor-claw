@@ -373,7 +373,9 @@ export class MemoryManager {
 					if (this.hasFts5) {
 						try {
 							this.db.prepare("INSERT INTO chunks_fts (chunk_id, text) VALUES (?, ?)").run(c.id, c.text);
-						} catch {}
+						} catch (ftsErr) {
+							console.warn(`[FTS5] insert failed for ${c.id}: ${ftsErr}`);
+						}
 					}
 				}
 				insFile.run(path, file.hash, file.size);

@@ -1,6 +1,5 @@
-import { readFile, access } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { constants } from "node:fs";
 
 export interface HeartbeatConfig {
   enabled: boolean;
@@ -29,7 +28,7 @@ const DEFAULT_PROMPT = `你是一个定期检查的 AI 助手。以下是你的�
 ---
 `;
 
-const HEARTBEAT_OK_RE = /heartbeat_ok/i;
+const HEARTBEAT_OK_RE = /^\s*heartbeat_ok\s*$/im;
 
 export class HeartbeatRunner {
   private config: HeartbeatConfig;
@@ -39,6 +38,7 @@ export class HeartbeatRunner {
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   private state: HeartbeatState = { consecutiveSkips: 0 };
+  private stopped = false;
 
   constructor(opts: {
     config: HeartbeatConfig;
@@ -57,11 +57,14 @@ export class HeartbeatRunner {
       this.log("disabled, not starting");
       return;
     }
+    if (this.timer) return; // already running
+    this.stopped = false;
     this.log(`starting — every ${Math.round(this.config.everyMs / 60_000)}min`);
     this.scheduleNext();
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -98,6 +101,12 @@ export class HeartbeatRunner {
       return { status: "skipped", reason };
     }
 
+    const MAX_HEARTBEAT_SIZE = 8_000;
+    if (content.length > MAX_HEARTBEAT_SIZE) {
+      this.log(`warning: HEARTBEAT.md truncated (${content.length} chars → ${MAX_HEARTBEAT_SIZE})`);
+      content = content.slice(0, MAX_HEARTBEAT_SIZE) + "\n\n…(已截断)";
+    }
+
     const prompt = (this.config.prompt ?? DEFAULT_PROMPT) + content;
     const t0 = Date.now();
 
@@ -114,10 +123,14 @@ export class HeartbeatRunner {
         return { status: "ran", hasContent: false, durationMs };
       }
 
+      this.log(`content to deliver (${durationMs}ms)`);
+      try {
+        await this.onDelivery(response);
+      } catch (deliveryErr) {
+        this.log(`delivery failed: ${deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)}`);
+      }
       this.state.lastStatus = "ok";
       this.state.consecutiveSkips = 0;
-      this.log(`content to deliver (${durationMs}ms)`);
-      await this.onDelivery(response);
       return { status: "ran", hasContent: true, durationMs };
     } catch (err) {
       this.state.lastStatus = "error";
@@ -168,26 +181,16 @@ export class HeartbeatRunner {
     };
   }
 
-  /** Check if the Cursor Agent CLI binary is accessible. */
-  async checkCliHealth(cliPath = "cursor"): Promise<boolean> {
-    try {
-      await access(cliPath, constants.X_OK);
-      return true;
-    } catch {
-      this.log(`warning: CLI not found or not executable at "${cliPath}"`);
-      return false;
-    }
-  }
-
   // --- internals ---
 
   private scheduleNext(): void {
     const delay = this.computeDelay();
     this.timer = setTimeout(async () => {
+      this.timer = null;
+      if (this.stopped) return;
       await this.runOnce();
-      if (this.config.enabled) this.scheduleNext();
+      if (this.config.enabled && !this.stopped) this.scheduleNext();
     }, delay);
-    // Don't keep the process alive just for heartbeat
     this.timer.unref();
   }
 
@@ -201,6 +204,7 @@ export class HeartbeatRunner {
   private isWithinActiveHours(): boolean {
     const hours = this.config.activeHours;
     if (!hours) return true;
+    if (hours.start === hours.end) return true; // entire day
 
     const now = new Date().getHours();
     if (hours.start <= hours.end) {
