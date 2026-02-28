@@ -1,0 +1,41 @@
+#!/usr/bin/expect -f
+# Cursor Agent CLI PTY wrapper
+# Usage: agent-run.exp <workspace> <model> <prompt>
+# Allocates a pseudo-terminal so `-p` mode works reliably.
+
+# 关键：禁用 stdout 缓冲，让输出实时流到 Node.js 的 pipe
+fconfigure stdout -buffering none
+
+# 比 Node.js 侧 (30min) 短 1min，确保 expect 先超时
+set timeout 1740
+
+set workspace [lindex $argv 0]
+set model [lindex $argv 1]
+set prompt [lindex $argv 2]
+
+if {[info exists env(AGENT_BIN)]} {
+	set agent_bin $env(AGENT_BIN)
+} else {
+	set agent_bin "$env(HOME)/.local/bin/agent"
+}
+
+# 使用 list 构建命令防止 Tcl 元字符注入；-- 防止 prompt 被解析为 flag
+set cmd [list $agent_bin \
+	--force --trust --approve-mcps \
+	--workspace $workspace \
+	--model $model \
+	-- $prompt]
+spawn -noecho {*}$cmd
+
+expect {
+	eof {}
+	timeout {
+		send_user "\n\[TIMEOUT\] Agent 执行超过 29 分钟，已终止\n"
+		close
+		wait
+		exit 1
+	}
+}
+
+lassign [wait] pid spawnid os_error exit_status
+exit $exit_status

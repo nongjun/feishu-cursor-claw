@@ -1,0 +1,31 @@
+#!/usr/bin/expect -f
+# 持久交互式 Agent 会话
+# Usage: agent-session.exp <workspace> <model> <first_prompt>
+#
+# 双向透传：Node.js stdin → agent PTY，agent PTY → Node.js stdout
+# 会话保持活跃，直到 agent 退出或被外部 kill
+
+fconfigure stdout -buffering none
+set stty_init "-echo"
+set timeout -1
+
+set workspace [lindex $argv 0]
+set model [lindex $argv 1]
+set first_prompt [lindex $argv 2]
+
+if {[info exists env(AGENT_BIN)]} {
+	set agent_bin $env(AGENT_BIN)
+} else {
+	set agent_bin "$env(HOME)/.local/bin/agent"
+}
+
+set cmd [list $agent_bin \
+	--force --trust --approve-mcps \
+	--workspace $workspace \
+	--model $model \
+	-- $first_prompt]
+
+spawn -noecho {*}$cmd
+
+# 双向透传，直到 agent 退出
+interact
