@@ -122,7 +122,7 @@ watchFile(PROJECTS_PATH, { interval: 5000 }, () => {
 // ── 工作区模板自动初始化 ─────────────────────────
 const TEMPLATE_DIR = resolve(import.meta.dirname, "templates");
 const WORKSPACE_FILES = ["SOUL.md", "IDENTITY.md", "AGENTS.md", "USER.md", "TOOLS.md", "MEMORY.md", "HEARTBEAT.md", "TASKS.md"];
-const WORKSPACE_RULES = [".cursor/rules/agent-identity.mdc", ".cursor/rules/memory-protocol.mdc", ".cursor/rules/scheduler-protocol.mdc"];
+const WORKSPACE_RULES = [".cursor/rules/agent-identity.mdc", ".cursor/rules/memory-protocol.mdc", ".cursor/rules/scheduler-protocol.mdc", ".cursor/rules/cursor-capabilities.mdc"];
 
 function ensureWorkspace(wsPath: string): void {
 	mkdirSync(resolve(wsPath, "memory"), { recursive: true });

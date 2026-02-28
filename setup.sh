@@ -108,7 +108,7 @@ if [[ ! -f "$BOT_DIR/package.json" ]]; then
     echo ""
     echo "❌ 项目文件不存在: $BOT_DIR/package.json"
     echo "   请先将项目文件复制到 $BOT_DIR"
-    echo "   需要的文件: server.ts, agent-run.exp, package.json, feishu/"
+    echo "   需要的文件: server.ts, package.json"
     exit 1
 fi
 
@@ -184,8 +184,8 @@ fi
 DEFAULT_WS="${DEFAULT_WS:-$WORK_DIR}"
 
 TEMPLATE_DIR="$BOT_DIR/templates"
-TEMPLATE_FILES=(SOUL.md IDENTITY.md AGENTS.md USER.md TOOLS.md MEMORY.md)
-TEMPLATE_RULES=(.cursor/rules/agent-identity.mdc .cursor/rules/memory-protocol.mdc)
+TEMPLATE_FILES=(SOUL.md IDENTITY.md AGENTS.md USER.md TOOLS.md MEMORY.md HEARTBEAT.md TASKS.md)
+TEMPLATE_RULES=(.cursor/rules/agent-identity.mdc .cursor/rules/memory-protocol.mdc .cursor/rules/scheduler-protocol.mdc .cursor/rules/cursor-capabilities.mdc)
 
 mkdir -p "$DEFAULT_WS/memory" "$DEFAULT_WS/sessions" "$DEFAULT_WS/.cursor/rules"
 

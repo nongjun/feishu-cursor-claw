@@ -166,12 +166,15 @@ templates/                   Shipped with the repo (factory defaults)
 ├── IDENTITY.md              Name, emoji, vibe
 ├── AGENTS.md                Workspace operating rules
 ├── USER.md                  Owner profile & preferences
-├── TOOLS.md                 Tool capability memo
+├── TOOLS.md                 Cursor-native capabilities & tool memo
 ├── MEMORY.md                Long-term memory skeleton
+├── HEARTBEAT.md             Heartbeat checklist template
+├── TASKS.md                 Scheduled tasks documentation
 └── .cursor/rules/           Cursor rule files
-    ├── agent-identity.mdc   Identity + soul loading
+    ├── agent-identity.mdc   Identity + capability declaration
     ├── memory-protocol.mdc  Memory read/write protocol
-    └── scheduler-protocol.mdc  Scheduled task creation protocol
+    ├── scheduler-protocol.mdc  Scheduled task creation protocol
+    └── cursor-capabilities.mdc  Cursor-native capability guide
 
 ~/your-workspace/            User's actual workspace (auto-initialized)
 ├── SOUL.md                  Customized personality

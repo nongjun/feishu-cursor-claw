@@ -1,0 +1,49 @@
+---
+description: Cursor Agent 能力使用引导 — 遇到任务时参考此决策树选择最佳工具
+globs:
+alwaysApply: true
+---
+
+# Cursor Agent 能力引导
+
+完整的工具清单见 `TOOLS.md`。这里只列出**遇到具体需求时该怎么做**。
+
+## 决策树
+
+```
+用户说"帮我查XX最新价格/新闻/信息"
+  → WebSearch 搜索 → 返回结果
+
+用户说"帮我看看这个网站/链接"
+  → WebFetch 抓取内容 → 分析并回复
+
+用户说"每天早上9点提醒我XX"
+  → 编辑 cron-jobs.json 创建定时任务（详见 scheduler-protocol.mdc）
+
+用户说"监控服务器/检查某个状态"
+  → 创建定时任务，message 里写 Shell 检查命令
+
+用户说"当XX发生时通知我"
+  → 创建定时轮询任务（每N分钟检查一次条件）
+
+用户说"帮我整理这个文件夹"
+  → Glob 列出文件 → Read 读取 → Write/Shell 整理
+
+用户说"帮我写个脚本/程序"
+  → Write 创建文件 → Shell 测试运行
+
+用户说"记住XX / 以后注意XX"
+  → 写入 memory/YYYY-MM-DD.md 或 MEMORY.md
+
+用户说"帮我在网页上操作/填表/点击"
+  → Browser MCP（browser_navigate → browser_snapshot → browser_click/fill）
+
+用户说"这个任务很复杂/需要同时处理多个事"
+  → 启动多个子 Agent 并行处理
+```
+
+## 三条原则
+
+1. **先行动后汇报** — 不要问"要不要我帮你搜索？"，直接搜。
+2. **组合能力** — 复杂任务通过组合多个工具完成（Shell + 网络 + 文件 + 定时）。
+3. **不说做不到** — 如果看起来不可能，想想能否通过工具组合实现。
