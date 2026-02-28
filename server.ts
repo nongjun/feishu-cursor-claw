@@ -19,6 +19,8 @@ import { gzipSync, gunzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { MemoryManager } from "./memory.js";
+import { Scheduler, type CronJob } from "./scheduler.js";
+import { HeartbeatRunner } from "./heartbeat.js";
 
 const HOME = process.env.HOME;
 if (!HOME) throw new Error("$HOME is not set");
@@ -119,8 +121,8 @@ watchFile(PROJECTS_PATH, { interval: 5000 }, () => {
 
 // ── 工作区模板自动初始化 ─────────────────────────
 const TEMPLATE_DIR = resolve(import.meta.dirname, "templates");
-const WORKSPACE_FILES = ["SOUL.md", "IDENTITY.md", "AGENTS.md", "USER.md", "TOOLS.md", "MEMORY.md"];
-const WORKSPACE_RULES = [".cursor/rules/agent-identity.mdc", ".cursor/rules/memory-protocol.mdc"];
+const WORKSPACE_FILES = ["SOUL.md", "IDENTITY.md", "AGENTS.md", "USER.md", "TOOLS.md", "MEMORY.md", "HEARTBEAT.md", "TASKS.md"];
+const WORKSPACE_RULES = [".cursor/rules/agent-identity.mdc", ".cursor/rules/memory-protocol.mdc", ".cursor/rules/scheduler-protocol.mdc"];
 
 function ensureWorkspace(wsPath: string): void {
 	mkdirSync(resolve(wsPath, "memory"), { recursive: true });
@@ -162,6 +164,60 @@ try {
 } catch (e) {
 	console.warn(`[记忆] 初始化失败（功能降级）: ${e}`);
 }
+
+// ── 最近活跃会话（用于定时任务/心跳主动推送）─────
+let lastActiveChatId: string | undefined;
+
+// ── 定时任务调度器 ────────────────────────────────
+const cronStorePath = resolve(defaultWorkspace, "cron-jobs.json");
+
+const scheduler = new Scheduler({
+	storePath: cronStorePath,
+	defaultWorkspace,
+	onExecute: async (job: CronJob) => {
+		try {
+			const ws = job.workspace || defaultWorkspace;
+			const { result } = await runAgent(ws, job.message);
+			return { status: "ok" as const, result };
+		} catch (err) {
+			return { status: "error" as const, error: err instanceof Error ? err.message : String(err) };
+		}
+	},
+	onDelivery: async (job: CronJob, result: string) => {
+		if (!lastActiveChatId) {
+			console.warn("[调度] 无活跃会话，跳过发送");
+			return;
+		}
+		const title = `⏰ 定时任务: ${job.name}`;
+		if (result.length <= 3800) {
+			await sendCard(lastActiveChatId, result, { title, color: "purple" });
+		} else {
+			await sendCard(lastActiveChatId, result.slice(0, 3800) + "\n\n...(已截断)", { title, color: "purple" });
+		}
+	},
+	log: (msg: string) => console.log(`[调度] ${msg}`),
+});
+
+// ── 心跳系统 ──────────────────────────────────────
+const heartbeat = new HeartbeatRunner({
+	config: {
+		enabled: false,
+		everyMs: 30 * 60 * 1000,
+		workspaceDir: defaultWorkspace,
+	},
+	onExecute: async (prompt: string) => {
+		const { result } = await runAgent(defaultWorkspace, prompt);
+		return result;
+	},
+	onDelivery: async (content: string) => {
+		if (!lastActiveChatId) {
+			console.warn("[心跳] 无活跃会话，跳过发送");
+			return;
+		}
+		await sendCard(lastActiveChatId, content, { title: "💓 心跳检查", color: "purple" });
+	},
+	log: (msg: string) => console.log(`[心跳] ${msg}`),
+});
 
 // ── 飞书 Client ──────────────────────────────────
 const larkClient = new Lark.Client({
@@ -1008,6 +1064,8 @@ async function handle(params: {
 }) {
 	const { messageId, chatId, chatType, messageType, content } = params;
 	let { text } = params;
+	// 记录最近活跃会话用于定时任务/心跳主动推送
+	lastActiveChatId = chatId;
 	console.log(`[${new Date().toISOString()}] [${messageType}] ${text.slice(0, 80)}`);
 
 	// 全局并发控制
@@ -1132,6 +1190,8 @@ async function handleInner(
 			"| `/记忆 关键词` | `/recall 关键词` | 语义搜索记忆 |",
 			"| `/记录 内容` | `/log 内容` | 写入今日日记 |",
 			"| `/整理记忆` | `/reindex` | 重建记忆索引 |",
+			"| `/任务` | `/cron` `/定时` | 查看/管理定时任务 |",
+			"| `/心跳` | `/heartbeat` | 查看/管理心跳系统 |",
 			"",
 			"**项目路由：**",
 			"发送 `项目名:消息` 指定工作区，如 `openclaw:帮我看看这个bug`",
@@ -1163,6 +1223,8 @@ async function handleInner(
 			`**Key：** ${keyPreview}`,
 			`**STT：** ${sttStatus}`,
 			`**记忆：** ${memStatus}`,
+			`**调度：** ${(() => { const s = scheduler.getStats(); return s.total > 0 ? `${s.enabled}/${s.total} 任务${s.nextRunIn ? `（下次: ${s.nextRunIn}）` : ""}` : "无任务"; })()}`,
+			`**心跳：** ${heartbeat.getStatus().enabled ? `每 ${Math.round(heartbeat.getStatus().everyMs / 60000)} 分钟` : "未启用"}`,
 			`**并发：** ${active}/${MAX} 运行中，${waitQueue.length} 排队`,
 			"",
 			"**项目路由：**",
@@ -1317,6 +1379,151 @@ async function handleInner(
 		return;
 	}
 
+	// /任务、/cron、/定时 → 定时任务管理
+	const taskMatch = text.match(/^\/(任务|cron|定时|task|schedule|定时任务)[\s:：]*(.*)/i);
+	if (taskMatch) {
+		const subCmd = taskMatch[2].trim().toLowerCase();
+
+		if (!subCmd || subCmd === "list" || subCmd === "列表") {
+			const jobs = await scheduler.list();
+			if (jobs.length === 0) {
+				await replyCard(messageId, "暂无定时任务。\n\n在对话中告诉 AI「每天早上9点检查邮件」即可自动创建，\n或手动编辑工作区的 `cron-jobs.json`。", { title: "📋 定时任务", color: "blue" });
+				return;
+			}
+			const lines = jobs.map((j, i) => {
+				const status = j.enabled ? "✅" : "⏸";
+				const schedDesc = j.schedule.kind === "at" ? `一次性 ${j.schedule.at}` :
+					j.schedule.kind === "every" ? `每 ${Math.round(j.schedule.everyMs / 60000)} 分钟` :
+					`cron: ${j.schedule.expr}`;
+				const lastRun = j.state.lastRunAtMs ? new Date(j.state.lastRunAtMs).toLocaleString("zh-CN") : "从未执行";
+				return `${status} **${i + 1}. ${j.name}**\n   调度: ${schedDesc}\n   上次: ${lastRun}\n   ID: \`${j.id.slice(0, 8)}\``;
+			});
+			const stats = scheduler.getStats();
+			lines.push("", `共 ${stats.total} 个任务（${stats.enabled} 启用）${stats.nextRunIn ? `，下次执行: ${stats.nextRunIn}` : ""}`);
+			await replyCard(messageId, lines.join("\n"), { title: "📋 定时任务", color: "blue" });
+			return;
+		}
+
+		// /任务 暂停 ID
+		const pauseMatch = subCmd.match(/^(暂停|pause|disable)\s+(\S+)/i);
+		if (pauseMatch) {
+			const idPrefix = pauseMatch[2];
+			const job = (await scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
+			if (!job) { await replyCard(messageId, `未找到 ID 为 \`${idPrefix}\` 的任务`, { title: "未找到", color: "orange" }); return; }
+			await scheduler.update(job.id, { enabled: false });
+			await replyCard(messageId, `已暂停: **${job.name}**`, { title: "⏸ 已暂停", color: "orange" });
+			return;
+		}
+
+		// /任务 恢复 ID
+		const resumeMatch = subCmd.match(/^(恢复|resume|enable)\s+(\S+)/i);
+		if (resumeMatch) {
+			const idPrefix = resumeMatch[2];
+			const job = (await scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
+			if (!job) { await replyCard(messageId, `未找到 ID 为 \`${idPrefix}\` 的任务`, { title: "未找到", color: "orange" }); return; }
+			await scheduler.update(job.id, { enabled: true });
+			await replyCard(messageId, `已恢复: **${job.name}**`, { title: "✅ 已恢复", color: "green" });
+			return;
+		}
+
+		// /任务 删除 ID
+		const delMatch = subCmd.match(/^(删除|delete|remove|del)\s+(\S+)/i);
+		if (delMatch) {
+			const idPrefix = delMatch[2];
+			const job = (await scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
+			if (!job) { await replyCard(messageId, `未找到 ID 为 \`${idPrefix}\` 的任务`, { title: "未找到", color: "orange" }); return; }
+			await scheduler.remove(job.id);
+			await replyCard(messageId, `已删除: **${job.name}**`, { title: "🗑 已删除", color: "grey" });
+			return;
+		}
+
+		// /任务 执行 ID
+		const runMatch = subCmd.match(/^(执行|run|trigger)\s+(\S+)/i);
+		if (runMatch) {
+			const idPrefix = runMatch[2];
+			const job = (await scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
+			if (!job) { await replyCard(messageId, `未找到 ID 为 \`${idPrefix}\` 的任务`, { title: "未找到", color: "orange" }); return; }
+			await replyCard(messageId, `正在手动执行: **${job.name}**...`, { title: "▶ 执行中", color: "wathet" });
+			const result = await scheduler.run(job.id);
+			await replyCard(messageId, result.status === "ok" ? `执行成功: **${job.name}**` : `执行失败: ${result.error}`, {
+				title: result.status === "ok" ? "✅ 完成" : "❌ 失败",
+				color: result.status === "ok" ? "green" : "red",
+			});
+			return;
+		}
+
+		await replyCard(messageId, "未知子命令。\n\n用法：\n- `/任务` — 查看所有任务\n- `/任务 暂停 ID` — 暂停任务\n- `/任务 恢复 ID` — 恢复任务\n- `/任务 删除 ID` — 删除任务\n- `/任务 执行 ID` — 手动执行", { title: "用法", color: "orange" });
+		return;
+	}
+
+	// /心跳 → 心跳系统管理
+	const hbMatch = text.match(/^\/(心跳|heartbeat|hb)[\s:：]*(.*)/i);
+	if (hbMatch) {
+		const subCmd = hbMatch[2].trim().toLowerCase();
+
+		if (!subCmd || subCmd === "status" || subCmd === "状态") {
+			const s = heartbeat.getStatus();
+			const statusText = [
+				`**状态：** ${s.enabled ? "✅ 已启用" : "⏸ 已关闭"}`,
+				`**间隔：** 每 ${Math.round(s.everyMs / 60000)} 分钟`,
+				s.lastRunAt ? `**上次执行：** ${new Date(s.lastRunAt).toLocaleString("zh-CN")}` : "**上次执行：** 从未",
+				s.nextRunAt ? `**下次执行：** ${new Date(s.nextRunAt).toLocaleString("zh-CN")}` : "",
+				s.lastStatus ? `**上次状态：** ${s.lastStatus}` : "",
+				"",
+				"**用法：**",
+				"- `/心跳 开启` — 启动心跳检查",
+				"- `/心跳 关闭` — 停止心跳检查",
+				"- `/心跳 执行` — 立即执行一次",
+				"- `/心跳 间隔 分钟数` — 设置间隔",
+				"",
+				"编辑工作区的 `HEARTBEAT.md` 可自定义检查清单。",
+			].filter(Boolean).join("\n");
+			await replyCard(messageId, statusText, { title: "💓 心跳系统", color: "purple" });
+			return;
+		}
+
+		if (/^(开启|enable|on|start|启动)$/i.test(subCmd)) {
+			heartbeat.updateConfig({ enabled: true });
+			await replyCard(messageId, `心跳已开启，每 ${Math.round(heartbeat.getStatus().everyMs / 60000)} 分钟检查一次。\n\n编辑 \`HEARTBEAT.md\` 自定义检查清单。`, { title: "💓 已开启", color: "green" });
+			return;
+		}
+
+		if (/^(关闭|disable|off|stop|停止)$/i.test(subCmd)) {
+			heartbeat.updateConfig({ enabled: false });
+			await replyCard(messageId, "心跳已关闭。", { title: "💓 已关闭", color: "grey" });
+			return;
+		}
+
+		if (/^(执行|run|check|检查)$/i.test(subCmd)) {
+			await replyCard(messageId, "💓 正在执行心跳检查...", { title: "执行中", color: "wathet" });
+			const result = await heartbeat.runOnce();
+			if (result.status === "ran") {
+				await replyCard(messageId, result.hasContent ? "心跳检查完成，发现需要关注的事项（已发送）" : "心跳检查完成，一切正常 ✅", {
+					title: "💓 检查完成",
+					color: "green",
+				});
+			} else {
+				await replyCard(messageId, `跳过: ${result.reason}`, { title: "💓 跳过", color: "grey" });
+			}
+			return;
+		}
+
+		const intervalMatch = subCmd.match(/^(间隔|interval)\s+(\d+)/i);
+		if (intervalMatch) {
+			const mins = Number.parseInt(intervalMatch[2], 10);
+			if (mins < 1 || mins > 1440) {
+				await replyCard(messageId, "间隔范围: 1-1440 分钟", { title: "无效", color: "orange" });
+				return;
+			}
+			heartbeat.updateConfig({ everyMs: mins * 60_000 });
+			await replyCard(messageId, `心跳间隔已设为 **${mins} 分钟**`, { title: "💓 已更新", color: "green" });
+			return;
+		}
+
+		await replyCard(messageId, "未知子命令。发送 `/心跳` 查看用法。", { title: "用法", color: "orange" });
+		return;
+	}
+
 	// /new、/新对话、/新会话 → 重置会话
 	const { workspace, prompt, label } = route(text);
 	if (/^\/(new|新对话|新会话)\s*$/i.test(prompt.trim())) {
@@ -1413,6 +1620,9 @@ async function handleInner(
 			memory.appendSessionLog(workspace, "assistant", result.slice(0, 3000), usedModel);
 		}
 
+		// Agent 可能修改了 cron-jobs.json，重新加载调度器
+		scheduler.reload().catch(() => {});
+
 		const fullResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${result}` : result;
 		const doneTitle = quotaWarning ? `完成 · ${elapsed}` : `完成 · ${elapsed}`;
 
@@ -1496,7 +1706,7 @@ const sttEngine = config.VOLC_STT_APP_ID ? "火山引擎豆包大模型" : "本�
 const memEngine = memory ? `豆包 Embedding (${config.VOLC_EMBEDDING_MODEL})` : "未启用";
 console.log(`
 ┌──────────────────────────────────────────────────┐
-│  飞书 → Cursor Agent 中继服务 v4                 │
+│  飞书 → Cursor Agent 中继服务 v5                 │
 │  记忆体系: OpenClaw 风格 (SOUL + MEMORY)         │
 ├──────────────────────────────────────────────────┤
 │  模型: ${config.CURSOR_MODEL}
@@ -1505,6 +1715,8 @@ console.log(`
 │  收件: ${INBOX_DIR}
 │  语音: ${sttEngine}
 │  记忆: ${memEngine}
+│  调度: cron-jobs.json (文件监听)
+│  心跳: 默认关闭（飞书 /心跳 开启）
 │
 │  身份文件: SOUL.md, IDENTITY.md, USER.md
 │  记忆文件: MEMORY.md, memory/*.md
@@ -1519,6 +1731,12 @@ ${list}
 │  热更换: 编辑 .env 即可
 └──────────────────────────────────────────────────┘
 `);
+
+// 启动定时任务调度器
+scheduler.start().catch((e) => console.warn(`[调度] 启动失败: ${e}`));
+
+// 心跳默认关闭，通过飞书 /心跳 开启 指令启用
+// heartbeat.start();
 
 ws.start({ eventDispatcher: dispatcher });
 console.log("飞书长连接已启动，等待消息...");

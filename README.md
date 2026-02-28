@@ -25,6 +25,10 @@ Phone (Feishu) ──WebSocket──→ feishu-cursor ──Cursor CLI──→ 
                                           │
                                Volcengine STT (primary)
                                Local whisper (fallback)
+                                    │
+                             ┌──────┴──────┐
+                          Scheduler    Heartbeat
+                          (cron-jobs)  (HEARTBEAT.md)
 ```
 
 ## Features
@@ -43,6 +47,8 @@ Phone (Feishu) ──WebSocket──→ feishu-cursor ──Cursor CLI──→ 
 - **Model fallback**: billing errors auto-downgrade to `auto` model with notification
 - **Memory system v2**: OpenClaw-style identity + memory with embedding cache, incremental indexing, FTS5 BM25 keyword search, and vector hybrid search
 - **Smart memory injection**: memory context injected only on the first message of each session (subsequent messages skip injection — Cursor already has context via `--resume`)
+- **Scheduled tasks**: AI-created cron jobs via `cron-jobs.json` — supports one-shot, interval, and cron expressions
+- **Heartbeat system**: periodic AI check-in via `HEARTBEAT.md` with active hours support
 - **Auto workspace init**: first run auto-copies identity/memory templates to your workspace
 
 ## Quick Start
@@ -94,6 +100,8 @@ All commands support Chinese aliases:
 | `/memory query` | `/记忆 关键词` | Semantic search memories |
 | `/log text` | `/记录 内容` | Write to today's daily log |
 | `/reindex` | `/整理记忆` | Rebuild memory index |
+| `/task` | `/任务` `/cron` `/定时` | View/manage scheduled tasks |
+| `/heartbeat` | `/心跳` | View/manage heartbeat system |
 
 **Project routing**: `projectname: your message` routes to a specific workspace.
 
@@ -162,7 +170,8 @@ templates/                   Shipped with the repo (factory defaults)
 ├── MEMORY.md                Long-term memory skeleton
 └── .cursor/rules/           Cursor rule files
     ├── agent-identity.mdc   Identity + soul loading
-    └── memory-protocol.mdc  Memory read/write protocol
+    ├── memory-protocol.mdc  Memory read/write protocol
+    └── scheduler-protocol.mdc  Scheduled task creation protocol
 
 ~/your-workspace/            User's actual workspace (auto-initialized)
 ├── SOUL.md                  Customized personality
@@ -171,7 +180,10 @@ templates/                   Shipped with the repo (factory defaults)
 ├── MEMORY.md                Real memories (auto-updated)
 ├── memory/                  Daily logs (YYYY-MM-DD.md)
 ├── sessions/                Conversation transcripts (YYYY-MM-DD.jsonl)
-└── .memory.sqlite           Vector embeddings database
+├── .memory.sqlite           Vector embeddings database
+├── HEARTBEAT.md             Heartbeat checklist (AI reads periodically)
+├── TASKS.md                 Task documentation
+└── cron-jobs.json           Scheduled tasks (AI-writable)
 ```
 
 ### How It Works
@@ -206,8 +218,8 @@ Phase 1: Bridge ✅ (current)
 
 Phase 2: Smart Agent
   ✅ Persistent memory v2 (embedding cache, incremental indexing, FTS5 BM25, session-first injection)
-  🔲 Heartbeat monitoring (service health + Cursor connectivity probes)
-  🔲 Scheduled tasks (cron-triggered agent execution)
+  ✅ Heartbeat monitoring (HEARTBEAT.md + configurable intervals + active hours)
+  ✅ Scheduled tasks (AI-created cron jobs via cron-jobs.json file watching)
   🔲 Multi-user isolation (Feishu user_id → independent workspace/session)
   🔲 More IM support (Slack / Discord / Telegram / WeChat)
 
@@ -282,6 +294,8 @@ bun run server.ts
 | `/memory 关键词` | `/记忆 关键词` | 语义搜索记忆 |
 | `/log 内容` | `/记录 内容` | 写入今日日记 |
 | `/reindex` | `/整理记忆` | 重建记忆索引 |
+| `/任务` | `/cron` `/定时` | 查看/管理定时任务 |
+| `/心跳` | `/heartbeat` | 查看/管理心跳系统 |
 
 ## 记忆与身份体系
 
@@ -309,6 +323,8 @@ bun run server.ts
 5. **增量索引**：仅对内容变化的文件重新嵌入（按内容 hash 追踪）
 6. **嵌入缓存**：相同文本块永远不会重复调用嵌入 API
 7. **Cursor 规则**：`.cursor/rules/*.mdc` 指导 Cursor 在会话开始时读取身份和记忆文件
+8. **定时任务**：Cursor Agent 可写入 `cron-jobs.json` 自动创建定时任务，到期自动执行并飞书通知
+9. **心跳检查**：定期读取 `HEARTBEAT.md` 检查清单，有异常自动通知
 
 ### 定制
 
@@ -317,6 +333,39 @@ bun run server.ts
 - `IDENTITY.md` — 给你的 AI 起个名字
 - `USER.md` — 填入你的信息
 - `SOUL.md` — 调整核心原则和行为边界
+
+## 定时任务与心跳
+
+### 定时任务
+
+在飞书对话中告诉 AI 创建定时任务，AI 会自动写入 `cron-jobs.json`：
+
+- "每天早上9点检查邮件" → cron 表达式
+- "每小时检查服务状态" → 固定间隔
+- "明天下午3点提醒我开会" → 一次性任务
+
+管理指令：
+
+| 指令 | 说明 |
+|------|------|
+| `/任务` | 查看所有定时任务 |
+| `/任务 暂停 ID` | 暂停任务 |
+| `/任务 恢复 ID` | 恢复任务 |
+| `/任务 删除 ID` | 删除任务 |
+| `/任务 执行 ID` | 手动触发 |
+
+### 心跳系统
+
+编辑 `HEARTBEAT.md` 添加检查项，然后开启心跳：
+
+| 指令 | 说明 |
+|------|------|
+| `/心跳 开启` | 启动心跳检查 |
+| `/心跳 关闭` | 停止 |
+| `/心跳 间隔 30` | 设为每 30 分钟 |
+| `/心跳 执行` | 立即检查一次 |
+
+心跳检查时 AI 阅读 `HEARTBEAT.md`，一切正常回复 `HEARTBEAT_OK`，有异常自动飞书通知。
 
 ## 语音识别配置
 

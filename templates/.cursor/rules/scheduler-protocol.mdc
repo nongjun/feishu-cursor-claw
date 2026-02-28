@@ -1,0 +1,78 @@
+---
+description: 定时任务协议 — 如何创建和管理定时任务
+globs:
+alwaysApply: true
+---
+
+# 定时任务协议
+
+当用户要求设置定时任务、提醒、闹钟或周期性检查时，通过编辑工作区根目录的 `cron-jobs.json` 来创建任务。
+
+## cron-jobs.json 结构
+
+```json
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "uuid-v4",
+      "name": "任务描述名",
+      "enabled": true,
+      "deleteAfterRun": false,
+      "schedule": { "kind": "every", "everyMs": 3600000 },
+      "message": "触发时发送给 Cursor Agent 的 prompt",
+      "createdAt": "ISO-8601 时间戳",
+      "updatedAt": "ISO-8601 时间戳",
+      "state": {}
+    }
+  ]
+}
+```
+
+## 调度类型
+
+### `at` — 一次性定时
+
+在指定时间执行一次：
+
+```json
+{ "kind": "at", "at": "2026-03-01T09:00:00+08:00" }
+```
+
+### `every` — 固定间隔
+
+按毫秒间隔重复执行：
+
+```json
+{ "kind": "every", "everyMs": 86400000 }
+```
+
+常用间隔：1小时 = 3600000，6小时 = 21600000，12小时 = 43200000，24小时 = 86400000
+
+### `cron` — Cron 表达式
+
+标准 5 段 cron 表达式，必须指定时区：
+
+```json
+{ "kind": "cron", "expr": "0 9 * * 1-5", "tz": "Asia/Shanghai" }
+```
+
+## 操作规则
+
+1. **先读后改** — 编辑前必须先读取 `cron-jobs.json`，保留所有现有任务
+2. **UUID v4** — 新任务 ID 使用 UUID v4 格式
+3. **message 字段** — 写入触发时要执行的完整 prompt（系统会把它发送给 Cursor Agent）
+4. **一次性任务** — 设置 `deleteAfterRun: true`，执行后系统自动删除
+5. **state 字段** — 系统内部管理，不要手动修改
+6. **时区** — cron 表达式必须包含 `tz`，默认 `Asia/Shanghai`
+7. **时间戳** — `createdAt` 和 `updatedAt` 使用 ISO-8601 格式（带时区偏移）
+
+## 常见场景
+
+| 用户说 | 调度方式 | 配置 |
+|--------|----------|------|
+| "每天早上9点检查邮件" | cron | `"0 9 * * *"` |
+| "每小时检查服务器状态" | every | `3600000` |
+| "明天下午3点提醒我开会" | at | 具体 ISO 时间戳 + `deleteAfterRun: true` |
+| "工作日早上9点汇报" | cron | `"0 9 * * 1-5"` |
+| "每6小时备份一次" | every | `21600000` |
