@@ -1,5 +1,5 @@
 {
-  "name": "feishu-cursor",
+  "name": "feishu-cursor-claw",
   "version": "0.1.0",
   "description": "Turn Feishu/Lark into a remote control for Cursor AI — your personal AI strategic partner via IM",
   "type": "module",
@@ -23,7 +23,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nongjun/feishu-cursor"
+    "url": "https://github.com/nongjun/feishu-cursor-claw"
   },
   "devDependencies": {
     "@types/bun": "latest"
