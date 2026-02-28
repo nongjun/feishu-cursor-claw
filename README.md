@@ -41,6 +41,9 @@ Phone (Feishu) ──WebSocket──→ feishu-cursor ──Cursor CLI──→ 
 - **Security**: sensitive commands (like API key changes) are blocked in group chats
 - **Smart error guidance**: auth failures auto-display fix steps with dashboard links
 - **Model fallback**: billing errors auto-downgrade to `auto` model with notification
+- **Memory system v2**: OpenClaw-style identity + memory with embedding cache, incremental indexing, FTS5 BM25 keyword search, and vector hybrid search
+- **Smart memory injection**: memory context injected only on the first message of each session (subsequent messages skip injection — Cursor already has context via `--resume`)
+- **Auto workspace init**: first run auto-copies identity/memory templates to your workspace
 
 ## Quick Start
 
@@ -86,6 +89,11 @@ All commands support Chinese aliases:
 | `/new` | `/新对话` `/新会话` | Reset workspace session |
 | `/model name` | `/模型 name` `/切换模型 name` | Switch model |
 | `/apikey key` | `/密钥 key` `/换key key` | Update API key (DM only) |
+| `/stop` | `/终止` `/停止` | Kill running agent task |
+| `/memory` | `/记忆` | Memory system status |
+| `/memory query` | `/记忆 关键词` | Semantic search memories |
+| `/log text` | `/记录 内容` | Write to today's daily log |
+| `/reindex` | `/整理记忆` | Rebuild memory index |
 
 **Project routing**: `projectname: your message` routes to a specific workspace.
 
@@ -112,6 +120,8 @@ Copy `.env.example` to `.env` and fill in your values:
 | `CURSOR_MODEL` | No | Default: `opus-4.6-thinking` |
 | `VOLC_STT_APP_ID` | No | Volcengine app ID (skip to disable cloud STT) |
 | `VOLC_STT_ACCESS_TOKEN` | No | Volcengine access token |
+| `VOLC_EMBEDDING_API_KEY` | No | Volcengine embedding API key (for memory vector search) |
+| `VOLC_EMBEDDING_MODEL` | No | Default: `doubao-embedding-vision-250615` |
 
 ### Feishu Bot Setup
 
@@ -136,6 +146,54 @@ Create `../projects.json` (one level up from the bot directory):
 
 Then in Feishu: `strategy: 帮我审阅这份季度规划` routes to the strategy workspace.
 
+## Memory & Identity System
+
+Inspired by [OpenClaw](https://github.com/openclaw/openclaw), the bot includes a full identity + memory framework that gives your AI persistent personality and long-term memory.
+
+### Architecture
+
+```
+templates/                   Shipped with the repo (factory defaults)
+├── SOUL.md                  Personality & principles
+├── IDENTITY.md              Name, emoji, vibe
+├── AGENTS.md                Workspace operating rules
+├── USER.md                  Owner profile & preferences
+├── TOOLS.md                 Tool capability memo
+├── MEMORY.md                Long-term memory skeleton
+└── .cursor/rules/           Cursor rule files
+    ├── agent-identity.mdc   Identity + soul loading
+    └── memory-protocol.mdc  Memory read/write protocol
+
+~/your-workspace/            User's actual workspace (auto-initialized)
+├── SOUL.md                  Customized personality
+├── IDENTITY.md              Your AI's identity
+├── USER.md                  Your personal profile
+├── MEMORY.md                Real memories (auto-updated)
+├── memory/                  Daily logs (YYYY-MM-DD.md)
+├── sessions/                Conversation transcripts (YYYY-MM-DD.jsonl)
+└── .memory.sqlite           Vector embeddings database
+```
+
+### How It Works
+
+1. **First run**: `server.ts` auto-copies templates to your workspace (skips existing files)
+2. **Session start**: bot searches memories via vector + FTS5 BM25 hybrid search, injects relevant context into the first message
+3. **Within a session**: subsequent messages skip memory injection (Cursor retains context via `--resume`)
+4. **After each reply**: user message + assistant reply logged to session history
+5. **Incremental indexing**: only re-embeds files that have actually changed (tracked by content hash)
+6. **Embedding cache**: same text chunk is never sent to the embedding API twice
+7. **Feishu commands**: `/memory`, `/log`, `/reindex` for manual memory operations
+8. **Cursor rules**: `.cursor/rules/*.mdc` tell Cursor to read identity/memory files on session start
+
+### Customization
+
+Edit your workspace files to personalize:
+
+- **`IDENTITY.md`** — give your AI a name, emoji, and personality
+- **`USER.md`** — fill in your info so the AI serves you better
+- **`SOUL.md`** — adjust core principles and behavioral boundaries
+- **`MEMORY.md`** — the AI maintains this automatically, but you can edit it too
+
 ## Roadmap
 
 ```
@@ -147,7 +205,7 @@ Phase 1: Bridge ✅ (current)
   ✅ Security (group chat protection, smart error guidance)
 
 Phase 2: Smart Agent
-  🔲 Persistent memory (conversation history + context summarization)
+  ✅ Persistent memory v2 (embedding cache, incremental indexing, FTS5 BM25, session-first injection)
   🔲 Heartbeat monitoring (service health + Cursor connectivity probes)
   🔲 Scheduled tasks (cron-triggered agent execution)
   🔲 Multi-user isolation (Feishu user_id → independent workspace/session)
@@ -219,6 +277,46 @@ bun run server.ts
 | `/new` | `/新对话` `/新会话` | 重置当前工作区会话 |
 | `/model 名称` | `/模型 名称` `/切换模型 名称` | 切换模型 |
 | `/apikey key` | `/密钥 key` `/换key key` | 更换 API Key（仅限私聊） |
+| `/stop` | `/终止` `/停止` | 终止当前运行的任务 |
+| `/memory` | `/记忆` | 查看记忆系统状态 |
+| `/memory 关键词` | `/记忆 关键词` | 语义搜索记忆 |
+| `/log 内容` | `/记录 内容` | 写入今日日记 |
+| `/reindex` | `/整理记忆` | 重建记忆索引 |
+
+## 记忆与身份体系
+
+灵感来自 [OpenClaw](https://github.com/openclaw/openclaw)，为你的 AI 赋予持久人格和长期记忆。
+
+### 文件结构
+
+| 文件 | 用途 | 是否需要定制 |
+|------|------|------------|
+| `SOUL.md` | AI 的灵魂和人格 | 可选（默认已有不错的通用人格） |
+| `IDENTITY.md` | 名字、Emoji、气质 | **推荐**（给你的 AI 一个身份） |
+| `AGENTS.md` | 工作区操作规范 | 可选 |
+| `USER.md` | 你的个人信息和偏好 | **推荐**（帮 AI 更好地服务你） |
+| `TOOLS.md` | 工具使用备忘 | 按需添加 |
+| `MEMORY.md` | 长期记忆 | AI 自动维护，也可手动编辑 |
+| `memory/*.md` | 每日日记 | 自动生成 |
+| `sessions/*.jsonl` | 会话转录 | 自动记录 |
+
+### 工作原理
+
+1. **首次启动**：`server.ts` 自动将 `templates/` 中的模板复制到你的工作区（已有文件不覆盖）
+2. **新会话首条消息**：向量 + FTS5 BM25 混合搜索相关记忆，注入上下文
+3. **会话内后续消息**：跳过记忆注入（Cursor 通过 `--resume` 保持上下文）
+4. **每条消息**：用户消息 + AI 回复自动记录到会话日志
+5. **增量索引**：仅对内容变化的文件重新嵌入（按内容 hash 追踪）
+6. **嵌入缓存**：相同文本块永远不会重复调用嵌入 API
+7. **Cursor 规则**：`.cursor/rules/*.mdc` 指导 Cursor 在会话开始时读取身份和记忆文件
+
+### 定制
+
+编辑工作区里的文件即可个性化：
+
+- `IDENTITY.md` — 给你的 AI 起个名字
+- `USER.md` — 填入你的信息
+- `SOUL.md` — 调整核心原则和行为边界
 
 ## 语音识别配置
 
@@ -231,6 +329,14 @@ bun run server.ts
 不配置火山引擎时自动使用本地 whisper-tiny（质量较低但可离线工作）。
 
 **降级链路**：火山引擎豆包大模型 → 本地 whisper-cpp → 告知用户
+
+### 向量记忆搜索（可选）
+
+配置火山引擎向量嵌入 API 启用语义记忆搜索：
+
+1. 在 `.env` 中设置 `VOLC_EMBEDDING_API_KEY`
+2. 默认模型：`doubao-embedding-vision-250615`（无需修改）
+3. 首次启动自动索引工作区的 `MEMORY.md` 和 `memory/*.md`
 
 ## 项目路由
 

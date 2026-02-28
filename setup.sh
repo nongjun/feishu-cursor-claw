@@ -169,6 +169,54 @@ else
     echo "  ✅ projects.json 已存在"
 fi
 
+# ── 初始化工作区（身份 + 记忆模板）──────────────
+echo ""
+echo "🧠 初始化工作区身份与记忆体系..."
+
+# 从 projects.json 读取默认工作区路径
+if command -v bun &>/dev/null && [[ -f "$PROJECTS_FILE" ]]; then
+    DEFAULT_WS=$(bun -e "
+        const p = JSON.parse(require('fs').readFileSync('$PROJECTS_FILE','utf8'));
+        const def = p.default_project || Object.keys(p.projects)[0];
+        console.log(p.projects[def]?.path || '');
+    " 2>/dev/null)
+fi
+DEFAULT_WS="${DEFAULT_WS:-$WORK_DIR}"
+
+TEMPLATE_DIR="$BOT_DIR/templates"
+TEMPLATE_FILES=(SOUL.md IDENTITY.md AGENTS.md USER.md TOOLS.md MEMORY.md)
+TEMPLATE_RULES=(.cursor/rules/agent-identity.mdc .cursor/rules/memory-protocol.mdc)
+
+mkdir -p "$DEFAULT_WS/memory" "$DEFAULT_WS/sessions" "$DEFAULT_WS/.cursor/rules"
+
+COPIED=0
+for f in "${TEMPLATE_FILES[@]}"; do
+    if [[ ! -f "$DEFAULT_WS/$f" ]]; then
+        cp "$TEMPLATE_DIR/$f" "$DEFAULT_WS/$f"
+        echo "  📄 已复制 $f"
+        COPIED=$((COPIED + 1))
+    else
+        echo "  ✅ $f 已存在（保留用户定制版本）"
+    fi
+done
+
+for f in "${TEMPLATE_RULES[@]}"; do
+    if [[ ! -f "$DEFAULT_WS/$f" ]]; then
+        cp "$TEMPLATE_DIR/$f" "$DEFAULT_WS/$f"
+        echo "  📄 已复制 $f"
+        COPIED=$((COPIED + 1))
+    else
+        echo "  ✅ $f 已存在"
+    fi
+done
+
+if [[ $COPIED -gt 0 ]]; then
+    echo ""
+    echo "  💡 建议编辑以下文件完成个性化："
+    echo "     $DEFAULT_WS/IDENTITY.md  — 给你的 AI 起个名字"
+    echo "     $DEFAULT_WS/USER.md      — 填入你的个人信息"
+fi
+
 # ── 完成 ─────────────────────────────────────────
 echo ""
 echo "============================================="
@@ -183,4 +231,8 @@ echo "  后台运行:"
 echo "    nohup bun run server.ts > /tmp/relay.log 2>&1 &"
 echo ""
 echo "  更换 Key/模型: 直接编辑 .env（热更换）"
+echo ""
+echo "  工作区文件位置: $DEFAULT_WS"
+echo "    编辑 IDENTITY.md 和 USER.md 完成个性化"
+echo "    MEMORY.md 和 memory/ 会随使用自动积累"
 echo "============================================="

@@ -18,6 +18,7 @@ import { Readable } from "node:stream";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
+import { MemoryManager } from "./memory.js";
 
 const HOME = process.env.HOME;
 if (!HOME) throw new Error("$HOME is not set");
@@ -52,6 +53,8 @@ interface EnvConfig {
 	CURSOR_MODEL: string;
 	VOLC_STT_APP_ID: string;
 	VOLC_STT_ACCESS_TOKEN: string;
+	VOLC_EMBEDDING_API_KEY: string;
+	VOLC_EMBEDDING_MODEL: string;
 }
 
 function parseEnv(): EnvConfig {
@@ -80,6 +83,8 @@ function parseEnv(): EnvConfig {
 		CURSOR_MODEL: env.CURSOR_MODEL || "opus-4.6-thinking",
 		VOLC_STT_APP_ID: env.VOLC_STT_APP_ID || "",
 		VOLC_STT_ACCESS_TOKEN: env.VOLC_STT_ACCESS_TOKEN || "",
+		VOLC_EMBEDDING_API_KEY: env.VOLC_EMBEDDING_API_KEY || "",
+		VOLC_EMBEDDING_MODEL: env.VOLC_EMBEDDING_MODEL || "doubao-embedding-vision-250615",
 	};
 }
 
@@ -111,6 +116,52 @@ watchFile(PROJECTS_PATH, { interval: 5000 }, () => {
 		projectsConfig = JSON.parse(readFileSync(PROJECTS_PATH, "utf-8"));
 	} catch {}
 });
+
+// ── 工作区模板自动初始化 ─────────────────────────
+const TEMPLATE_DIR = resolve(import.meta.dirname, "templates");
+const WORKSPACE_FILES = ["SOUL.md", "IDENTITY.md", "AGENTS.md", "USER.md", "TOOLS.md", "MEMORY.md"];
+const WORKSPACE_RULES = [".cursor/rules/agent-identity.mdc", ".cursor/rules/memory-protocol.mdc"];
+
+function ensureWorkspace(wsPath: string): void {
+	mkdirSync(resolve(wsPath, "memory"), { recursive: true });
+	mkdirSync(resolve(wsPath, "sessions"), { recursive: true });
+	mkdirSync(resolve(wsPath, ".cursor/rules"), { recursive: true });
+
+	let copied = 0;
+	for (const f of [...WORKSPACE_FILES, ...WORKSPACE_RULES]) {
+		const target = resolve(wsPath, f);
+		if (!existsSync(target)) {
+			const src = resolve(TEMPLATE_DIR, f);
+			if (existsSync(src)) {
+				writeFileSync(target, readFileSync(src, "utf-8"));
+				console.log(`[工作区] 从模板复制: ${f}`);
+				copied++;
+			}
+		}
+	}
+	if (copied > 0) {
+		console.log(`[工作区] ${wsPath} 初始化完成 (${copied} 个文件)`);
+		console.log("[工作区] 建议编辑 IDENTITY.md 和 USER.md 完成个性化");
+	}
+}
+
+// ── 记忆管理器 ───────────────────────────────────
+const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
+ensureWorkspace(defaultWorkspace);
+let memory: MemoryManager | undefined;
+try {
+	memory = new MemoryManager({
+		workspaceDir: defaultWorkspace,
+		embeddingApiKey: config.VOLC_EMBEDDING_API_KEY,
+		embeddingModel: config.VOLC_EMBEDDING_MODEL,
+		embeddingEndpoint: "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+	});
+	memory.index().then((n) => {
+		if (n > 0) console.log(`[记忆] 启动索引完成: ${n} 块`);
+	}).catch((e) => console.warn(`[记忆] 启动索引失败: ${e}`));
+} catch (e) {
+	console.warn(`[记忆] 初始化失败（功能降级）: ${e}`);
+}
 
 // ── 飞书 Client ──────────────────────────────────
 const larkClient = new Lark.Client({
@@ -391,6 +442,9 @@ function transcribeVolcengine(wavPath: string): Promise<string> {
 			}
 		});
 
+		ws.on("unexpected-response", (_req: unknown, res: { statusCode?: number }) => {
+			done(new Error(`HTTP ${res.statusCode ?? "unknown"} (WebSocket 升级被拒)`));
+		});
 		ws.on("error", (err: Error) => done(new Error(`WebSocket: ${err.message}`)));
 		ws.on("close", () => { if (!settled) done(new Error("连接意外断开")); });
 	});
@@ -421,15 +475,24 @@ async function transcribeAudio(audioPath: string): Promise<string | null> {
 	try {
 		wavPath = convertToWav(audioPath);
 
-		// 火山引擎豆包大模型 → 本地 whisper 兜底
+		// 火山引擎豆包大模型（含重试）→ 本地 whisper 兜底
 		if (config.VOLC_STT_APP_ID && config.VOLC_STT_ACCESS_TOKEN) {
-			try {
-				const text = await transcribeVolcengine(wavPath);
-				console.log(`[STT 火山引擎] 成功 (${text.length} chars)`);
-				return text;
-			} catch (err) {
-				console.warn("[STT 火山引擎失败，降级本地]", err instanceof Error ? err.message : err);
+			const maxRetries = 3;
+			for (let attempt = 1; attempt <= maxRetries; attempt++) {
+				try {
+					const text = await transcribeVolcengine(wavPath);
+					console.log(`[STT 火山引擎] 成功 (${text.length} chars, 第${attempt}次)`);
+					return text;
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					console.warn(`[STT 火山引擎] 第${attempt}/${maxRetries}次失败: ${msg}`);
+					if (attempt < maxRetries) {
+						console.log(`[STT 火山引擎] 500ms 后重试...`);
+						await new Promise((r) => setTimeout(r, 500));
+					}
+				}
 			}
+			console.warn("[STT 火山引擎] 重试耗尽，降级本地 whisper");
 		}
 
 		const local = transcribeLocal(wavPath);
@@ -511,6 +574,56 @@ function route(text: string): { workspace: string; prompt: string; label: string
 	};
 }
 
+// ── 可选模型列表 ─────────────────────────────────
+const CURSOR_MODELS = [
+	{ id: "opus-4.6-thinking", label: "Opus 4.6", desc: "最强深度推理" },
+	{ id: "opus-4.5-thinking", label: "Opus 4.5", desc: "强力推理" },
+	{ id: "gpt-5.3-codex", label: "GPT-5.3 Codex", desc: "OpenAI 编码旗舰" },
+	{ id: "gemini-3.1-pro", label: "Gemini 3.1 Pro", desc: "Google 最新旗舰" },
+	{ id: "gemini-3-pro", label: "Gemini 3 Pro", desc: "Google 旗舰" },
+	{ id: "gemini-3-flash", label: "Gemini 3 Flash", desc: "Google 极速" },
+	{ id: "auto", label: "Auto", desc: "自动选择最优" },
+];
+
+function fuzzyMatchModel(input: string): { exact?: typeof CURSOR_MODELS[number]; candidates: typeof CURSOR_MODELS } {
+	const q = input.toLowerCase().replace(/[\s_-]+/g, "");
+
+	// 精确匹配 id
+	const exact = CURSOR_MODELS.find((m) => m.id === input.toLowerCase());
+	if (exact) return { exact, candidates: [] };
+
+	// 编号匹配
+	const num = Number.parseInt(input, 10);
+	if (!Number.isNaN(num) && num >= 1 && num <= CURSOR_MODELS.length) {
+		return { exact: CURSOR_MODELS[num - 1], candidates: [] };
+	}
+
+	// 模糊：id 或 label 包含输入
+	const candidates = CURSOR_MODELS.filter((m) => {
+		const mid = m.id.replace(/[\s_-]+/g, "");
+		const mlab = m.label.toLowerCase().replace(/[\s_-]+/g, "");
+		return mid.includes(q) || mlab.includes(q) || q.includes(mid);
+	});
+
+	if (candidates.length === 1) return { exact: candidates[0], candidates: [] };
+	return { candidates };
+}
+
+function buildModelListCard(currentModel: string, errorHint?: string): string {
+	const lines: string[] = [];
+	if (errorHint) lines.push(`${errorHint}\n`);
+	for (let i = 0; i < CURSOR_MODELS.length; i++) {
+		const m = CURSOR_MODELS[i];
+		const isCurrent = m.id === currentModel;
+		lines.push(isCurrent
+			? `**${i + 1}. ${m.id}** · ${m.desc} ✅`
+			: `${i + 1}. \`${m.id}\` · ${m.desc}`);
+	}
+	lines.push("");
+	lines.push("> 发送 `/模型 编号` 或 `/模型 名称` 切换");
+	return lines.join("\n");
+}
+
 // ── 模型自动降级 ─────────────────────────────────
 // 每次请求都先试首选模型，失败再用 auto 重试
 const BILLING_PATTERNS = [
@@ -536,6 +649,8 @@ function isBillingError(text: string): boolean {
 }
 
 const childPids = new Set<number>();
+// workspace → 正在运行的 agent 子进程（用于 /stop 终止）
+const activeAgents = new Map<string, { pid: number; kill: () => void }>();
 
 process.on("SIGTERM", () => {
 	for (const pid of childPids) {
@@ -564,8 +679,35 @@ function formatElapsed(seconds: number): string {
 	return `${hrs}时${mins % 60}分`;
 }
 
-// 每个 workspace 保存 session_id，实现会话连续性
-const sessionIds = new Map<string, string>();
+// 每个 workspace 保存 session_id，实现会话连续性（持久化到磁盘）
+const SESSIONS_PATH = resolve(import.meta.dirname, ".sessions.json");
+
+function loadSessions(): Map<string, string> {
+	try {
+		if (existsSync(SESSIONS_PATH)) {
+			const data = JSON.parse(readFileSync(SESSIONS_PATH, "utf-8"));
+			const map = new Map<string, string>(Object.entries(data));
+			console.log(`[Session] 从磁盘恢复 ${map.size} 个会话`);
+			return map;
+		}
+	} catch {}
+	return new Map();
+}
+
+function saveSessions(): void {
+	try {
+		const obj = Object.fromEntries(sessionIds);
+		writeFileSync(SESSIONS_PATH, JSON.stringify(obj, null, 2));
+	} catch {}
+}
+
+const sessionIds = loadSessions();
+
+// 包装 set/delete 自动持久化
+const _origSet = sessionIds.set.bind(sessionIds);
+const _origDelete = sessionIds.delete.bind(sessionIds);
+sessionIds.set = (k: string, v: string) => { const r = _origSet(k, v); saveSessions(); return r; };
+sessionIds.delete = (k: string) => { const r = _origDelete(k); saveSessions(); return r; };
 
 function resetSession(workspace: string): void {
 	if (sessionIds.has(workspace)) {
@@ -636,7 +778,13 @@ function execAgent(
 			env: { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY },
 			stdio: ["ignore", "pipe", "pipe"],
 		});
-		if (child.pid) childPids.add(child.pid);
+		if (child.pid) {
+			childPids.add(child.pid);
+			activeAgents.set(workspace, {
+				pid: child.pid,
+				kill: () => { try { child.kill("SIGTERM"); } catch {} },
+			});
+		}
 
 		let stderr = "";
 		let resultText = "";
@@ -654,6 +802,7 @@ function execAgent(
 			done = true;
 			clearInterval(timer);
 			if (child.pid) childPids.delete(child.pid);
+			activeAgents.delete(workspace);
 		}
 
 		const timer = setInterval(() => {
@@ -803,11 +952,13 @@ async function runAgent(
 
 				if (isBillingError(e.message)) {
 					console.error(`[降级] ${primaryModel} 欠费: ${e.message.slice(0, 200)}`);
-					sessionIds.delete(workspace);
+					const fallbackSessionId = sessionIds.get(workspace);
 					try {
-						const { result } = await execAgent(workspace, "auto", prompt, {
+						const { result, sessionId: newSid } = await execAgent(workspace, "auto", prompt, {
+							sessionId: fallbackSessionId,
 							onProgress: opts?.onProgress,
 						});
+						if (newSid) sessionIds.set(workspace, newSid);
 						return {
 							result,
 							quotaWarning: `⚠️ **模型降级通知**\n\n${primaryModel} 欠费，本次已用 auto 完成。\n\n> ${e.message.slice(0, 100)}`,
@@ -973,9 +1124,14 @@ async function handleInner(
 			"|------|----------|------|",
 			"| `/help` | `/帮助` `/指令` | 显示本帮助 |",
 			"| `/status` | `/状态` | 查看服务状态 |",
+			"| `/stop` | `/终止` `/停止` | 终止当前任务 |",
 			"| `/new` | `/新对话` `/新会话` | 重置当前工作区会话 |",
-			"| `/model 名称` | `/模型 名称` `/切换模型 名称` | 切换模型 |",
-			"| `/apikey key` | `/密钥 key` `/换key key` | 更换 API Key（仅私聊） |",
+			"| `/model` | `/模型` `/切换模型` | 查看/切换模型 |",
+			"| `/apikey key` | `/密钥 key` | 更换 API Key（仅私聊） |",
+			"| `/记忆` | `/memory` | 查看记忆系统状态 |",
+			"| `/记忆 关键词` | `/recall 关键词` | 语义搜索记忆 |",
+			"| `/记录 内容` | `/log 内容` | 写入今日日记 |",
+			"| `/整理记忆` | `/reindex` | 重建记忆索引 |",
 			"",
 			"**项目路由：**",
 			"发送 `项目名:消息` 指定工作区，如 `openclaw:帮我看看这个bug`",
@@ -996,10 +1152,17 @@ async function handleInner(
 			const name = Object.entries(projectsConfig.projects).find(([, v]) => v.path === ws)?.[0] || ws;
 			return `  \`${name}\` → ${sid.slice(0, 12)}...`;
 		}).join("\n") || "  (无活跃会话)";
+		const memStatus = memory
+			? (() => {
+				const stats = memory.getStats();
+				return `向量记忆（${stats.chunks} 块, ${stats.files} 文件, ${stats.cachedEmbeddings} 缓存）`;
+			})()
+			: "未启用";
 		const statusText = [
 			`**模型：** ${config.CURSOR_MODEL}`,
 			`**Key：** ${keyPreview}`,
 			`**STT：** ${sttStatus}`,
+			`**记忆：** ${memStatus}`,
 			`**并发：** ${active}/${MAX} 运行中，${waitQueue.length} 排队`,
 			"",
 			"**项目路由：**",
@@ -1013,20 +1176,144 @@ async function handleInner(
 	}
 
 	// /model、/模型、/切换模型 → 切换模型
-	const modelMatch = text.match(/^\/(model|模型|切换模型)[\s:：=]*(.+)/i);
-	if (/^\/(model|模型|切换模型)\s*$/i.test(text.trim())) {
-		await replyCard(messageId, `当前模型：**${config.CURSOR_MODEL}**\n\n切换示例：\`/模型 sonnet-4\` 或 \`/model sonnet-4\``, { title: "当前模型", color: "blue" });
-		return;
-	}
+	const modelMatch = text.match(/^\/(model|模型|切换模型)[\s:：=]*(.*)/i);
 	if (modelMatch) {
-		const newModel = modelMatch[2].trim();
+		const input = modelMatch[2].trim();
+
+		// 无参数 → 显示模型列表
+		if (!input) {
+			await replyCard(messageId, buildModelListCard(config.CURSOR_MODEL), { title: "选择模型", color: "blue" });
+			return;
+		}
+
+		const { exact, candidates } = fuzzyMatchModel(input);
+
+		if (exact) {
+			// 精确匹配或唯一模糊匹配 → 直接切换
+			if (exact.id === config.CURSOR_MODEL) {
+				await replyCard(messageId, `当前已是 **${exact.id}**（${exact.desc}），无需切换。`, { title: "当前模型", color: "blue" });
+				return;
+			}
+			const envContent = readFileSync(ENV_PATH, "utf-8");
+			const updated = envContent.match(/^CURSOR_MODEL=/m)
+				? envContent.replace(/^CURSOR_MODEL=.*$/m, `CURSOR_MODEL=${exact.id}`)
+				: `${envContent.trimEnd()}\nCURSOR_MODEL=${exact.id}\n`;
+			writeFileSync(ENV_PATH, updated);
+			const prev = config.CURSOR_MODEL;
+			await replyCard(messageId, `${prev} → **${exact.id}**（${exact.desc}）\n\n已写入 .env，2 秒内自动生效。`, { title: "模型已切换", color: "green" });
+			console.log(`[指令] 模型切换: ${prev} → ${exact.id}`);
+			return;
+		}
+
+		if (candidates.length > 1) {
+			// 多个候选 → 提示用户精确选择
+			const list = candidates.map((m) => `- \`${m.id}\`（${m.desc}）`).join("\n");
+			await replyCard(messageId, `「${input}」匹配到多个模型：\n\n${list}\n\n请输入更精确的名称或编号。`, { title: "请精确选择", color: "orange" });
+			return;
+		}
+
+		// 列表外的自定义模型名 → 确认后切换
+		if (input.length < 2 || /^\d+$/.test(input)) {
+			await replyCard(messageId, buildModelListCard(config.CURSOR_MODEL, `「${input}」无匹配，请从列表中选择`), { title: "未找到模型", color: "orange" });
+			return;
+		}
+
 		const envContent = readFileSync(ENV_PATH, "utf-8");
 		const updated = envContent.match(/^CURSOR_MODEL=/m)
-			? envContent.replace(/^CURSOR_MODEL=.*$/m, `CURSOR_MODEL=${newModel}`)
-			: `${envContent.trimEnd()}\nCURSOR_MODEL=${newModel}\n`;
+			? envContent.replace(/^CURSOR_MODEL=.*$/m, `CURSOR_MODEL=${input}`)
+			: `${envContent.trimEnd()}\nCURSOR_MODEL=${input}\n`;
 		writeFileSync(ENV_PATH, updated);
-		await replyCard(messageId, `**模型已切换**\n\n${config.CURSOR_MODEL} → **${newModel}**\n\n已写入 .env，2 秒内自动生效。`, { title: "模型已切换", color: "green" });
-		console.log(`[指令] 模型切换: ${config.CURSOR_MODEL} → ${newModel}`);
+		const prev = config.CURSOR_MODEL;
+		await replyCard(messageId, `${prev} → **${input}**\n\n⚠️ 此模型不在常用列表中，若名称有误可能导致执行失败。\n发送 \`/模型\` 查看常用列表。`, { title: "模型已切换", color: "yellow" });
+		console.log(`[指令] 模型切换(自定义): ${prev} → ${input}`);
+		return;
+	}
+
+	// /stop、/终止、/停止 → 终止当前运行的 agent
+	if (/^\/(stop|终止|停止)\s*$/i.test(text.trim())) {
+		const { workspace: ws } = route(text);
+		const agent = activeAgents.get(ws);
+		if (agent) {
+			agent.kill();
+			console.log(`[指令] 终止 agent pid=${agent.pid} workspace=${ws}`);
+			await replyCard(messageId, "已终止当前任务。\n\n发送新消息将继续在当前会话中对话。", { title: "已终止", color: "orange" });
+		} else {
+			await replyCard(messageId, "当前没有正在运行的任务。", { title: "无任务", color: "grey" });
+		}
+		return;
+	}
+
+	// /记忆、/memory → 记忆系统操作
+	const memoryMatch = text.match(/^\/(记忆|memory|搜索记忆|recall)[\s:：=]*(.*)/i);
+	if (memoryMatch) {
+		if (!memory) {
+			await replyCard(messageId, "记忆系统未初始化（缺少向量嵌入 API Key）。\n\n请在 `.env` 中设置 `VOLC_EMBEDDING_API_KEY`。", { title: "记忆不可用", color: "orange" });
+			return;
+		}
+		const query = memoryMatch[2].trim();
+		if (!query) {
+			const summary = memory.getRecentSummary(3);
+			const stats = memory.getStats();
+			const statusText = [
+				`**记忆索引：** ${stats.chunks} 块（${stats.files} 文件, ${stats.cachedEmbeddings} 嵌入缓存）`,
+				`**嵌入模型：** ${config.VOLC_EMBEDDING_MODEL}`,
+				"",
+				"**用法：**",
+				"- `/记忆 关键词` — 语义搜索记忆",
+				"- `/记录 内容` — 写入今日日记",
+				"- `/整理记忆` — 重建索引",
+				"",
+				summary ? `**最近记忆摘要：**\n\n${summary.slice(0, 2000)}` : "（暂无记忆文件）",
+			].join("\n");
+			await replyCard(messageId, statusText, { title: "🧠 记忆系统", color: "purple" });
+			return;
+		}
+		try {
+			const results = await memory.search(query, 5);
+			if (results.length === 0) {
+				await replyCard(messageId, `未找到与「${query}」相关的记忆。\n\n记忆文件：\`MEMORY.md\` + \`memory/*.md\``, { title: "无匹配", color: "grey" });
+				return;
+			}
+			const lines = results.map((r, i) =>
+				`**${i + 1}.** \`${r.path}#L${r.startLine}\`（相关度 ${(r.score * 100).toFixed(0)}%）\n${r.text.slice(0, 300)}`,
+			);
+			await replyCard(messageId, lines.join("\n\n---\n\n"), { title: `🔍 搜索「${query}」`, color: "purple" });
+		} catch (e) {
+			await replyCard(messageId, `搜索失败: ${e instanceof Error ? e.message : e}`, { color: "red" });
+		}
+		return;
+	}
+
+	// /记录 → 快速写入今日日记
+	const logMatch = text.match(/^\/(记录|log|note)[\s:：=]+(.+)/is);
+	if (logMatch) {
+		if (!memory) {
+			await replyCard(messageId, "记忆系统未初始化。", { title: "不可用", color: "orange" });
+			return;
+		}
+		const content = logMatch[2].trim();
+		const path = memory.appendDailyLog(content);
+		await replyCard(messageId, `已记录到今日日记。\n\n\`${path}\``, { title: "📝 已记录", color: "green" });
+		return;
+	}
+
+	// /整理记忆 → 重建记忆索引
+	if (/^\/(整理记忆|reindex|索引)\s*$/i.test(text.trim())) {
+		if (!memory) {
+			await replyCard(messageId, "记忆系统未初始化。", { title: "不可用", color: "orange" });
+			return;
+		}
+		const reindexCardId = await replyCard(messageId, "⏳ 正在重建记忆索引...", { title: "索引中", color: "wathet" });
+		try {
+			const count = await memory.index();
+			const msg = `索引完成: **${count}** 个记忆块\n\n嵌入模型: \`${config.VOLC_EMBEDDING_MODEL}\``;
+			if (reindexCardId) await updateCard(reindexCardId, msg, { title: "✅ 索引完成", color: "green" });
+			else await replyCard(messageId, msg, { title: "✅ 索引完成", color: "green" });
+		} catch (e) {
+			const msg = `索引失败: ${e instanceof Error ? e.message : e}`;
+			if (reindexCardId) await updateCard(reindexCardId, msg, { title: "索引失败", color: "red" });
+			else await replyCard(messageId, msg, { color: "red" });
+		}
 		return;
 	}
 
@@ -1072,6 +1359,26 @@ async function handleInner(
 	console.log(`[Agent] 调用 Cursor CLI workspace=${workspace} model=${model} card=${cardId}`);
 	const taskStart = Date.now();
 
+	// 记忆系统：仅在会话首条消息注入，后续消息跳过（Cursor --resume 已有上下文）
+	let enrichedPrompt = prompt;
+	const isNewSession = !sessionIds.has(workspace);
+	if (memory) {
+		if (isNewSession) {
+			try {
+				const memCtx = await memory.getContextForPrompt(prompt);
+				if (memCtx) {
+					enrichedPrompt = prompt + memCtx;
+					console.log(`[记忆] 新会话，注入 ${memCtx.length} 字符上下文`);
+				}
+			} catch (e) {
+				console.warn(`[记忆] 搜索失败（跳过）: ${e}`);
+			}
+		} else {
+			console.log("[记忆] 已有会话，跳过注入");
+		}
+		memory.appendSessionLog(workspace, "user", prompt, model);
+	}
+
 	// runAgent 获取 session lock 后回调 onStart，更新卡片为"处理中"
 	const onStart = cardId
 		? () => {
@@ -1096,10 +1403,15 @@ async function handleInner(
 		: undefined;
 
 	try {
-		const { result, quotaWarning } = await runAgent(workspace, prompt, { onProgress, onStart });
+		const { result, quotaWarning } = await runAgent(workspace, enrichedPrompt, { onProgress, onStart });
 		const usedModel = quotaWarning ? "auto" : model;
 		const elapsed = formatElapsed(Math.round((Date.now() - taskStart) / 1000));
 		console.log(`[${new Date().toISOString()}] 完成 [${label}] model=${usedModel} elapsed=${elapsed} (${result.length} chars)`);
+
+		// 记录 assistant 回复到会话日志
+		if (memory) {
+			memory.appendSessionLog(workspace, "assistant", result.slice(0, 3000), usedModel);
+		}
 
 		const fullResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${result}` : result;
 		const doneTitle = quotaWarning ? `完成 · ${elapsed}` : `完成 · ${elapsed}`;
@@ -1181,17 +1493,24 @@ const list = Object.entries(projectsConfig.projects)
 	.map(([k, v]) => `  ${k} → ${v.path}`)
 	.join("\n");
 const sttEngine = config.VOLC_STT_APP_ID ? "火山引擎豆包大模型" : "本地 whisper";
+const memEngine = memory ? `豆包 Embedding (${config.VOLC_EMBEDDING_MODEL})` : "未启用";
 console.log(`
 ┌──────────────────────────────────────────────────┐
-│  飞书 → Cursor Agent 中继服务 v3                 │
+│  飞书 → Cursor Agent 中继服务 v4                 │
+│  记忆体系: OpenClaw 风格 (SOUL + MEMORY)         │
 ├──────────────────────────────────────────────────┤
 │  模型: ${config.CURSOR_MODEL}
 │  Key:  ...${config.CURSOR_API_KEY.slice(-8)}
 │  连接: 飞书 WebSocket 长连接
 │  收件: ${INBOX_DIR}
 │  语音: ${sttEngine}
+│  记忆: ${memEngine}
 │
-│  回复: 互动卡片 + 消息更新（无需 CardKit 权限）
+│  身份文件: SOUL.md, IDENTITY.md, USER.md
+│  记忆文件: MEMORY.md, memory/*.md
+│  规则: .cursor/rules/*.mdc
+│
+│  回复: 互动卡片 + 消息更新
 │  直连: 飞书消息 → Cursor CLI（stream-json + --resume）
 │
 │  项目路由:
