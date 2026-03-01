@@ -751,7 +751,7 @@ function isBillingError(text: string): boolean {
 }
 
 const childPids = new Set<number>();
-// workspace → 正在运行的 agent 子进程（用于 /stop 终止）
+// lockKey → 正在运行的 agent 子进程（用于 /stop 终止）
 const activeAgents = new Map<string, { pid: number; kill: () => void }>();
 
 process.on("SIGTERM", () => {
@@ -893,19 +893,24 @@ function getSessionHistory(workspace: string, limit = 10): SessionEntry[] {
 		.slice(0, limit);
 }
 
-// 同一 workspace 的消息必须串行执行
+// 同一 session 的消息串行执行；不同 session（即使同工作区）可并行
 const sessionLocks = new Map<string, Promise<void>>();
-async function withSessionLock<T>(workspace: string, fn: () => Promise<T>): Promise<T> {
-	const prev = sessionLocks.get(workspace) || Promise.resolve();
+async function withSessionLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
+	const prev = sessionLocks.get(lockKey) || Promise.resolve();
 	let release!: () => void;
 	const next = new Promise<void>((r) => { release = r; });
-	sessionLocks.set(workspace, next);
+	sessionLocks.set(lockKey, next);
 	await prev;
 	try {
 		return await fn();
 	} finally {
 		release();
 	}
+}
+
+function getLockKey(workspace: string): string {
+	const sid = getActiveSessionId(workspace);
+	return sid ? `session:${sid}` : `ws:${workspace}`;
 }
 
 // 解析一行 stream-json 输出
@@ -929,6 +934,7 @@ function tryParseJson(line: string): StreamEvent | null {
 
 // 核心：spawn agent CLI，解析 stream-json，返回结果
 function execAgent(
+	lockKey: string,
 	workspace: string,
 	model: string,
 	prompt: string,
@@ -957,7 +963,7 @@ function execAgent(
 		});
 		if (child.pid) {
 			childPids.add(child.pid);
-			activeAgents.set(workspace, {
+			activeAgents.set(lockKey, {
 				pid: child.pid,
 				kill: () => { try { child.kill("SIGTERM"); } catch {} },
 			});
@@ -978,7 +984,7 @@ function execAgent(
 			done = true;
 			clearInterval(timer);
 			if (child.pid) childPids.delete(child.pid);
-			activeAgents.delete(workspace);
+			activeAgents.delete(lockKey);
 		}
 
 		const timer = setInterval(() => {
@@ -991,7 +997,7 @@ function execAgent(
 					: assistantBuf.slice(-300);
 				if (snippet) {
 					opts.onProgress({
-						elapsed: Math.round(elapsed / 1000),
+						elapsed: Math.round((now - startTime) / 1000),
 						phase,
 						snippet,
 					});
@@ -1081,8 +1087,8 @@ function execAgent(
 	});
 }
 
-// ── 工作区活跃追踪（用于判断是否需要排队）──────
-const busyWorkspaces = new Set<string>();
+// ── 会话级活跃追踪（lockKey = session:id 或 ws:path）──────
+const busySessions = new Set<string>();
 
 // ── 发送消息（会话优先，欠费降级 auto）──────────
 async function runAgent(
@@ -1096,15 +1102,17 @@ async function runAgent(
 ): Promise<{ result: string; quotaWarning?: string }> {
 	const primaryModel = config.CURSOR_MODEL;
 	const summary = opts?.sessionSummary;
+	// 在消息到达时确定 lockKey，同会话串行，不同会话可并行
+	const lockKey = getLockKey(workspace);
 
-	return withSessionLock(workspace, async () => {
-		busyWorkspaces.add(workspace);
+	return withSessionLock(lockKey, async () => {
+		busySessions.add(lockKey);
 		opts?.onStart?.();
 		try {
 			const existingSessionId = getActiveSessionId(workspace);
 
 			try {
-				const { result, sessionId } = await execAgent(workspace, primaryModel, prompt, {
+				const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, prompt, {
 					sessionId: existingSessionId,
 					onProgress: opts?.onProgress,
 				});
@@ -1116,8 +1124,9 @@ async function runAgent(
 				if (existingSessionId && !isBillingError(e.message)) {
 					console.warn(`[重试] 会话可能过期，重新创建: ${e.message.slice(0, 100)}`);
 					archiveAndResetSession(workspace);
+					// 新会话 → 新 lockKey，但当前 lock 仍有效，用原 lockKey 追踪子进程
 					try {
-						const { result, sessionId } = await execAgent(workspace, primaryModel, prompt, {
+						const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, prompt, {
 							onProgress: opts?.onProgress,
 						});
 						if (sessionId) setActiveSession(workspace, sessionId, summary);
@@ -1132,7 +1141,7 @@ async function runAgent(
 					console.error(`[降级] ${primaryModel} 欠费: ${e.message.slice(0, 200)}`);
 					const fallbackSessionId = getActiveSessionId(workspace);
 					try {
-						const { result, sessionId: newSid } = await execAgent(workspace, "auto", prompt, {
+						const { result, sessionId: newSid } = await execAgent(lockKey, workspace, "auto", prompt, {
 							sessionId: fallbackSessionId,
 							onProgress: opts?.onProgress,
 						});
@@ -1150,7 +1159,7 @@ async function runAgent(
 				throw e;
 			}
 		} finally {
-			busyWorkspaces.delete(workspace);
+			busySessions.delete(lockKey);
 		}
 	});
 }
@@ -1433,13 +1442,14 @@ async function handleInner(
 		return;
 	}
 
-	// /stop、/终止、/停止 → 终止当前运行的 agent
+	// /stop、/终止、/停止 → 终止当前会话运行的 agent
 	if (/^\/(stop|终止|停止)\s*$/i.test(text.trim())) {
 		const { workspace: ws } = route(text);
-		const agent = activeAgents.get(ws);
+		const lk = getLockKey(ws);
+		const agent = activeAgents.get(lk);
 		if (agent) {
 			agent.kill();
-			console.log(`[指令] 终止 agent pid=${agent.pid} workspace=${ws}`);
+			console.log(`[指令] 终止 agent pid=${agent.pid} session=${lk}`);
 			await replyCard(messageId, "已终止当前任务。\n\n发送新消息将继续在当前会话中对话。", { title: "已终止", color: "orange" });
 		} else {
 			await replyCard(messageId, "当前没有正在运行的任务。", { title: "无任务", color: "grey" });
@@ -1757,24 +1767,25 @@ async function handleInner(
 
 	const model = config.CURSOR_MODEL;
 
-	// 创建或复用卡片：全局排队卡片 → 同工作区排队 → 处理中
-	const needsWorkspaceQueue = !cardId && busyWorkspaces.has(workspace);
+	// 创建或复用卡片：全局排队卡片 → 同会话排队 → 处理中
+	const currentLockKey = getLockKey(workspace);
+	const needsSessionQueue = !cardId && busySessions.has(currentLockKey);
 	if (!cardId) {
-		const status = needsWorkspaceQueue
-			? `⏳ 排队中（同工作区有任务进行中）\n\n> ${prompt.slice(0, 120)}`
+		const status = needsSessionQueue
+			? `⏳ 排队中（同会话有任务进行中）\n\n> ${prompt.slice(0, 120)}`
 			: `⏳ 正在执行...\n\n> ${prompt.slice(0, 120)}`;
 		cardId = await replyCard(messageId, status, {
-			title: needsWorkspaceQueue ? "排队中" : "处理中",
-			color: needsWorkspaceQueue ? "grey" : "wathet",
+			title: needsSessionQueue ? "排队中" : "处理中",
+			color: needsSessionQueue ? "grey" : "wathet",
 		});
 	} else {
-		// 从全局排队卡片复用，看是否还需要等同工作区锁
-		const status = busyWorkspaces.has(workspace)
-			? `⏳ 排队中（同工作区有任务进行中）\n\n> ${prompt.slice(0, 120)}`
+		// 从全局排队卡片复用，看是否还需要等同会话锁
+		const status = busySessions.has(currentLockKey)
+			? `⏳ 排队中（同会话有任务进行中）\n\n> ${prompt.slice(0, 120)}`
 			: `⏳ 正在执行...\n\n> ${prompt.slice(0, 120)}`;
 		await updateCard(cardId, status, {
-			title: busyWorkspaces.has(workspace) ? "排队中" : "处理中",
-			color: busyWorkspaces.has(workspace) ? "grey" : "wathet",
+			title: busySessions.has(currentLockKey) ? "排队中" : "处理中",
+			color: busySessions.has(currentLockKey) ? "grey" : "wathet",
 		});
 	}
 	console.log(`[Agent] 调用 Cursor CLI workspace=${workspace} model=${model} card=${cardId}`);
