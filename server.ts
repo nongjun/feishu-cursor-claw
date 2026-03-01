@@ -763,7 +763,7 @@ process.on("SIGTERM", () => {
 
 // ── Agent 执行引擎（直接 spawn CLI + stream-json）──
 const MAX_EXEC_TIMEOUT = 30 * 60 * 1000;
-const STUCK_TIMEOUT = 60 * 1000;
+const STUCK_TIMEOUT = 3 * 60 * 1000;
 const PROGRESS_INTERVAL = 2_000;
 
 interface AgentProgress {

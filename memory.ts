@@ -203,8 +203,12 @@ export class MemoryManager {
 					throw new Error(`Embedding API ${res.status}: ${body.slice(0, 200)}`);
 				}
 
-				const json = (await res.json()) as { data: { embedding: number[] }[] };
-				const embedding = json.data[0].embedding;
+				const json = (await res.json()) as {
+					data: { embedding: number[] } | { embedding: number[] }[];
+				};
+				// 火山引擎 multimodal API 返回 data.embedding（对象），标准 OpenAI 格式返回 data[0].embedding（数组）
+				const data = json.data;
+				const embedding = Array.isArray(data) ? data[0].embedding : data.embedding;
 				this.cacheEmbedding(hash, embedding);
 				return embedding;
 			} catch (err) {
