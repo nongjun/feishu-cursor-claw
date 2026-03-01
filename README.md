@@ -38,7 +38,7 @@ Phone (Feishu) ──WebSocket──→ feishu-cursor ──Cursor CLI──→ 
 - **Voice-to-text**: Volcengine Doubao STT (primary, high-accuracy Chinese) → local whisper-cpp (fallback)
 - **Live progress**: real-time streaming of thinking / tool calls / responses via Feishu cards
 - **Elapsed time**: completion cards show total execution time
-- **Smart queuing**: global concurrency limit + per-workspace serialization
+- **Session-level concurrency**: same session serializes; different sessions run in parallel — no global limits, Cursor CLI manages its own lifecycle
 - **Project routing**: prefix messages with `project:` to target different workspaces
 - **Hot reload**: edit `.env` to change API keys, models, STT config — no restart needed
 - **Bilingual commands**: all Feishu commands support both English and Chinese
@@ -250,7 +250,7 @@ Phase 1: Bridge ✅ (current)
   ✅ Feishu ↔ Cursor CLI bridge
   ✅ Voice recognition (Volcengine + whisper fallback)
   ✅ Bilingual command system
-  ✅ Streaming progress + smart queuing + session continuity
+  ✅ Streaming progress + session-level concurrency + session continuity
   ✅ Security (group chat protection, smart error guidance)
 
 Phase 2: Smart Agent
