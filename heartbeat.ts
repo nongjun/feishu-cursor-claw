@@ -1,6 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-
 export interface HeartbeatConfig {
   enabled: boolean;
   everyMs: number;
@@ -22,13 +19,11 @@ interface HeartbeatState {
   consecutiveSkips: number;
 }
 
-const DEFAULT_PROMPT = `你是一个定期检查的 AI 助手。以下是你的心跳检查清单（HEARTBEAT.md）。
-请检查每一项，如果有需要行动的事项请详细说明，如果一切正常请只回复 "HEARTBEAT_OK"。
+const DEFAULT_PROMPT = `[心跳检查] 读取 HEARTBEAT.md（如果存在），严格按清单执行检查。
+不要凭空推断或重复旧任务。检查 memory/ 获取近期上下文，需要时做后台维护。
+如果清单已过时，主动更新 HEARTBEAT.md。如果无需关注，只回复 HEARTBEAT_OK。`;
 
----
-`;
-
-const HEARTBEAT_OK_RE = /^\s*heartbeat_ok\s*$/im;
+const HEARTBEAT_OK_RE = /heartbeat_ok/im;
 
 export class HeartbeatRunner {
   private config: HeartbeatConfig;
@@ -81,33 +76,8 @@ export class HeartbeatRunner {
       return { status: "skipped", reason };
     }
 
-    const filePath = join(this.config.workspaceDir, "HEARTBEAT.md");
-    let content: string;
-    try {
-      content = (await readFile(filePath, "utf-8")).trim();
-    } catch {
-      const reason = "no-heartbeat-file";
-      this.state.lastStatus = "skipped";
-      this.state.consecutiveSkips++;
-      this.log(`skipped: ${reason}`);
-      return { status: "skipped", reason };
-    }
-
-    if (!content) {
-      const reason = "empty-heartbeat-file";
-      this.state.lastStatus = "skipped";
-      this.state.consecutiveSkips++;
-      this.log(`skipped: ${reason}`);
-      return { status: "skipped", reason };
-    }
-
-    const MAX_HEARTBEAT_SIZE = 8_000;
-    if (content.length > MAX_HEARTBEAT_SIZE) {
-      this.log(`warning: HEARTBEAT.md truncated (${content.length} chars → ${MAX_HEARTBEAT_SIZE})`);
-      content = content.slice(0, MAX_HEARTBEAT_SIZE) + "\n\n…(已截断)";
-    }
-
-    const prompt = (this.config.prompt ?? DEFAULT_PROMPT) + content;
+    // Cursor Agent 自己读 HEARTBEAT.md，我们只发固定提示词
+    const prompt = this.config.prompt ?? DEFAULT_PROMPT;
     const t0 = Date.now();
 
     try {

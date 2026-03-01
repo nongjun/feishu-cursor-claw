@@ -9,7 +9,6 @@
  *
  * 启动: bun run server.ts
  */
-
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { spawn, execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync, watchFile, mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
@@ -121,8 +120,18 @@ watchFile(PROJECTS_PATH, { interval: 5000 }, () => {
 
 // ── 工作区模板自动初始化 ─────────────────────────
 const TEMPLATE_DIR = resolve(import.meta.dirname, "templates");
-const WORKSPACE_FILES = ["SOUL.md", "IDENTITY.md", "AGENTS.md", "USER.md", "TOOLS.md", "MEMORY.md", "HEARTBEAT.md", "TASKS.md"];
-const WORKSPACE_RULES = [".cursor/rules/agent-identity.mdc", ".cursor/rules/memory-protocol.mdc", ".cursor/rules/scheduler-protocol.mdc", ".cursor/rules/cursor-capabilities.mdc"];
+const WORKSPACE_FILES = ["MEMORY.md", "HEARTBEAT.md", "TASKS.md"];
+const WORKSPACE_RULES = [
+	".cursor/rules/soul.mdc",
+	".cursor/rules/agent-identity.mdc",
+	".cursor/rules/user-context.mdc",
+	".cursor/rules/workspace-rules.mdc",
+	".cursor/rules/tools.mdc",
+	".cursor/rules/memory-protocol.mdc",
+	".cursor/rules/scheduler-protocol.mdc",
+	".cursor/rules/heartbeat-protocol.mdc",
+	".cursor/rules/cursor-capabilities.mdc",
+];
 
 function ensureWorkspace(wsPath: string): void {
 	mkdirSync(resolve(wsPath, "memory"), { recursive: true });
@@ -158,9 +167,11 @@ try {
 		embeddingModel: config.VOLC_EMBEDDING_MODEL,
 		embeddingEndpoint: "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
 	});
-	memory.index().then((n) => {
-		if (n > 0) console.log(`[记忆] 启动索引完成: ${n} 块`);
-	}).catch((e) => console.warn(`[记忆] 启动索引失败: ${e}`));
+	setTimeout(() => {
+		memory!.index().then((n) => {
+			if (n > 0) console.log(`[记忆] 启动索引完成: ${n} 块`);
+		}).catch((e) => console.warn(`[记忆] 启动索引失败: ${e}`));
+	}, 3000);
 } catch (e) {
 	console.warn(`[记忆] 初始化失败（功能降级）: ${e}`);
 }
@@ -203,7 +214,7 @@ const scheduler = new Scheduler({
 // ── 心跳系统 ──────────────────────────────────────
 const heartbeat = new HeartbeatRunner({
 	config: {
-		enabled: false,
+		enabled: true,
 		everyMs: 30 * 60 * 1000,
 		workspaceDir: defaultWorkspace,
 	},
@@ -245,6 +256,24 @@ function buildCard(markdown: string, header?: { title?: string; color?: string }
 	return JSON.stringify(card);
 }
 
+// 从飞书 API 错误中提取可读原因
+function extractCardError(err: unknown): string | null {
+	try {
+		const e = err as Record<string, unknown>;
+		// axios 错误结构: err.response.data 或 err[1]（Lark SDK 包装）
+		const data = (e.response as Record<string, unknown>)?.data as Record<string, unknown>
+			?? (Array.isArray(e) ? e[1] : null)
+			?? e;
+		if (!data) return null;
+		const code = data.code as number;
+		const msg = data.msg as string;
+		if (code === 230099) return `卡片渲染失败: ${msg}`;
+		if (code === 230025) return "卡片内容超过30KB大小限制";
+		if (msg) return msg;
+	} catch {}
+	return null;
+}
+
 // ── 飞书消息操作 ─────────────────────────────────
 async function replyCard(
 	messageId: string,
@@ -273,14 +302,17 @@ async function updateCard(
 	messageId: string,
 	markdown: string,
 	header?: { title?: string; color?: string },
-): Promise<void> {
+): Promise<{ ok: boolean; error?: string }> {
 	try {
 		await larkClient.im.message.patch({
 			path: { message_id: messageId },
 			data: { content: buildCard(markdown, header) },
 		});
+		return { ok: true };
 	} catch (err) {
-		console.error("[更新卡片失败]", err);
+		const reason = extractCardError(err) || (err instanceof Error ? err.message : String(err));
+		console.error(`[更新卡片失败] ${reason}`);
+		return { ok: false, error: reason };
 	}
 }
 
@@ -722,7 +754,7 @@ process.on("SIGTERM", () => {
 // ── Agent 执行引擎（直接 spawn CLI + stream-json）──
 const MAX_EXEC_TIMEOUT = 30 * 60 * 1000;
 const STUCK_TIMEOUT = 60 * 1000;
-const PROGRESS_INTERVAL = 6_000;
+const PROGRESS_INTERVAL = 2_000;
 
 interface AgentProgress {
 	elapsed: number;
@@ -739,41 +771,118 @@ function formatElapsed(seconds: number): string {
 	return `${hrs}时${mins % 60}分`;
 }
 
-// 每个 workspace 保存 session_id，实现会话连续性（持久化到磁盘）
-const SESSIONS_PATH = resolve(import.meta.dirname, ".sessions.json");
+// ── 时间格式化 ───────────────────────────────────
+function formatRelativeTime(ms: number): string {
+	const diff = Date.now() - ms;
+	if (diff < 60_000) return "刚刚";
+	if (diff < 3600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+	if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}小时前`;
+	if (diff < 604800_000) return `${Math.floor(diff / 86400_000)}天前`;
+	return new Date(ms).toLocaleDateString("zh-CN");
+}
 
-function loadSessions(): Map<string, string> {
+// ── 会话管理（支持历史列表 + 切换）─────────────────
+const SESSIONS_PATH = resolve(import.meta.dirname, ".sessions.json");
+const MAX_SESSION_HISTORY = 20;
+
+interface SessionEntry {
+	id: string;
+	createdAt: number;
+	lastActiveAt: number;
+	summary: string;
+}
+
+interface WorkspaceSessions {
+	active: string | null;
+	history: SessionEntry[];
+}
+
+const sessionsStore: Map<string, WorkspaceSessions> = new Map();
+
+function loadSessionsFromDisk(): void {
 	try {
-		if (existsSync(SESSIONS_PATH)) {
-			const data = JSON.parse(readFileSync(SESSIONS_PATH, "utf-8"));
-			const map = new Map<string, string>(Object.entries(data));
-			console.log(`[Session] 从磁盘恢复 ${map.size} 个会话`);
-			return map;
+		if (!existsSync(SESSIONS_PATH)) return;
+		const raw = JSON.parse(readFileSync(SESSIONS_PATH, "utf-8"));
+		for (const [k, v] of Object.entries(raw)) {
+			if (typeof v === "string") {
+				// 向后兼容旧格式（纯 session ID 字符串）
+				sessionsStore.set(k, {
+					active: v,
+					history: [{ id: v, createdAt: Date.now(), lastActiveAt: Date.now(), summary: "(旧会话)" }],
+				});
+			} else {
+				sessionsStore.set(k, v as WorkspaceSessions);
+			}
 		}
+		console.log(`[Session] 从磁盘恢复 ${sessionsStore.size} 个工作区会话`);
 	} catch {}
-	return new Map();
 }
 
 function saveSessions(): void {
 	try {
-		const obj = Object.fromEntries(sessionIds);
-		writeFileSync(SESSIONS_PATH, JSON.stringify(obj, null, 2));
+		writeFileSync(SESSIONS_PATH, JSON.stringify(Object.fromEntries(sessionsStore), null, 2));
 	} catch {}
 }
 
-const sessionIds = loadSessions();
+loadSessionsFromDisk();
 
-// 包装 set/delete 自动持久化
-const _origSet = sessionIds.set.bind(sessionIds);
-const _origDelete = sessionIds.delete.bind(sessionIds);
-sessionIds.set = (k: string, v: string) => { const r = _origSet(k, v); saveSessions(); return r; };
-sessionIds.delete = (k: string) => { const r = _origDelete(k); saveSessions(); return r; };
+function getActiveSessionId(workspace: string): string | undefined {
+	return sessionsStore.get(workspace)?.active || undefined;
+}
 
-function resetSession(workspace: string): void {
-	if (sessionIds.has(workspace)) {
-		sessionIds.delete(workspace);
-		console.log(`[Session ${workspace}] 已重置`);
+function setActiveSession(workspace: string, sessionId: string, summary?: string): void {
+	let ws = sessionsStore.get(workspace);
+	if (!ws) {
+		ws = { active: null, history: [] };
+		sessionsStore.set(workspace, ws);
 	}
+
+	const existing = ws.history.find((h) => h.id === sessionId);
+	if (existing) {
+		existing.lastActiveAt = Date.now();
+	} else {
+		ws.history.unshift({
+			id: sessionId,
+			createdAt: Date.now(),
+			lastActiveAt: Date.now(),
+			summary: summary || "(新会话)",
+		});
+	}
+
+	if (ws.history.length > MAX_SESSION_HISTORY) {
+		ws.history = ws.history.slice(0, MAX_SESSION_HISTORY);
+	}
+
+	ws.active = sessionId;
+	saveSessions();
+}
+
+function archiveAndResetSession(workspace: string): void {
+	const ws = sessionsStore.get(workspace);
+	if (ws?.active) {
+		ws.active = null;
+		saveSessions();
+		console.log(`[Session ${workspace}] 已归档并重置`);
+	}
+}
+
+function switchToSession(workspace: string, sessionId: string): boolean {
+	const ws = sessionsStore.get(workspace);
+	if (!ws) return false;
+	const entry = ws.history.find((h) => h.id === sessionId);
+	if (!entry) return false;
+	ws.active = sessionId;
+	entry.lastActiveAt = Date.now();
+	saveSessions();
+	return true;
+}
+
+function getSessionHistory(workspace: string, limit = 10): SessionEntry[] {
+	const ws = sessionsStore.get(workspace);
+	if (!ws) return [];
+	return [...ws.history]
+		.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+		.slice(0, limit);
 }
 
 // 同一 workspace 的消息必须串行执行
@@ -902,6 +1011,7 @@ function execAgent(
 
 			if (ev.session_id && !sessionId) sessionId = ev.session_id;
 
+			const prevPhase = phase;
 			switch (ev.type) {
 				case "thinking":
 					phase = "thinking";
@@ -924,6 +1034,20 @@ function execAgent(
 						resultText = ev.error;
 					}
 					break;
+			}
+
+			// 阶段切换时立即触发一次进度更新（不等 interval）
+			if (phase !== prevPhase && opts?.onProgress) {
+				const now = Date.now();
+				lastProgressTime = now;
+				const snippet = phase === "thinking"
+					? thinkingBuf.slice(-200)
+					: assistantBuf.slice(-300);
+				opts.onProgress({
+					elapsed: Math.round((now - startTime) / 1000),
+					phase,
+					snippet: snippet || "...",
+				});
 			}
 		}
 
@@ -975,34 +1099,36 @@ async function runAgent(
 	opts?: {
 		onProgress?: (p: AgentProgress) => void;
 		onStart?: () => void;
+		sessionSummary?: string;
 	},
 ): Promise<{ result: string; quotaWarning?: string }> {
 	const primaryModel = config.CURSOR_MODEL;
+	const summary = opts?.sessionSummary;
 
 	return withSessionLock(workspace, async () => {
 		busyWorkspaces.add(workspace);
 		opts?.onStart?.();
 		try {
-			const existingSessionId = sessionIds.get(workspace);
+			const existingSessionId = getActiveSessionId(workspace);
 
 			try {
 				const { result, sessionId } = await execAgent(workspace, primaryModel, prompt, {
 					sessionId: existingSessionId,
 					onProgress: opts?.onProgress,
 				});
-				if (sessionId) sessionIds.set(workspace, sessionId);
+				if (sessionId) setActiveSession(workspace, sessionId, summary);
 				return { result };
 			} catch (err) {
 				const e = err instanceof Error ? err : new Error(String(err));
 
 				if (existingSessionId && !isBillingError(e.message)) {
 					console.warn(`[重试] 会话可能过期，重新创建: ${e.message.slice(0, 100)}`);
-					sessionIds.delete(workspace);
+					archiveAndResetSession(workspace);
 					try {
 						const { result, sessionId } = await execAgent(workspace, primaryModel, prompt, {
 							onProgress: opts?.onProgress,
 						});
-						if (sessionId) sessionIds.set(workspace, sessionId);
+						if (sessionId) setActiveSession(workspace, sessionId, summary);
 						return { result };
 					} catch (retryErr) {
 						const re = retryErr instanceof Error ? retryErr : new Error(String(retryErr));
@@ -1012,13 +1138,13 @@ async function runAgent(
 
 				if (isBillingError(e.message)) {
 					console.error(`[降级] ${primaryModel} 欠费: ${e.message.slice(0, 200)}`);
-					const fallbackSessionId = sessionIds.get(workspace);
+					const fallbackSessionId = getActiveSessionId(workspace);
 					try {
 						const { result, sessionId: newSid } = await execAgent(workspace, "auto", prompt, {
 							sessionId: fallbackSessionId,
 							onProgress: opts?.onProgress,
 						});
-						if (newSid) sessionIds.set(workspace, newSid);
+						if (newSid) setActiveSession(workspace, newSid, summary);
 						return {
 							result,
 							quotaWarning: `⚠️ **模型降级通知**\n\n${primaryModel} 欠费，本次已用 auto 完成。\n\n> ${e.message.slice(0, 100)}`,
@@ -1028,7 +1154,7 @@ async function runAgent(
 					}
 				}
 
-				sessionIds.delete(workspace);
+				archiveAndResetSession(workspace);
 				throw e;
 			}
 		} finally {
@@ -1178,32 +1304,48 @@ async function handleInner(
 	}
 
 	// /help → 显示所有可用指令
-	if (/^\/(help|帮助|指令)\s*$/i.test(text.trim())) {
+	const helpMatch = text.trim().match(/^\/(help|帮助|指令)\s*$/i);
+	if (helpMatch) {
+		const en = helpMatch[1].toLowerCase() === "help";
+		const c = (zh: string, enAlias?: string) => en && enAlias ? `\`${zh}\` \`${enAlias}\`` : `\`${zh}\``;
 		const helpText = [
-			"**可用指令：**",
+			"**基础指令**",
+			`- ${c("/帮助", "/help")} — 显示本帮助`,
+			`- ${c("/状态", "/status")} — 查看服务状态`,
+			`- ${c("/新对话", "/new")} — 重置当前会话`,
+			`- ${c("/终止", "/stop")} — 终止正在执行的任务`,
 			"",
-			"| 指令 | 中文别名 | 说明 |",
-			"|------|----------|------|",
-			"| `/help` | `/帮助` `/指令` | 显示本帮助 |",
-			"| `/status` | `/状态` | 查看服务状态 |",
-			"| `/stop` | `/终止` `/停止` | 终止当前任务 |",
-			"| `/new` | `/新对话` `/新会话` | 重置当前工作区会话 |",
-			"| `/model` | `/模型` `/切换模型` | 查看/切换模型 |",
-			"| `/apikey key` | `/密钥 key` | 更换 API Key（仅私聊） |",
-			"| `/记忆` | `/memory` | 查看记忆系统状态 |",
-			"| `/记忆 关键词` | `/recall 关键词` | 语义搜索记忆 |",
-			"| `/记录 内容` | `/log 内容` | 写入今日日记 |",
-			"| `/整理记忆` | `/reindex` | 重建记忆索引 |",
-			"| `/任务` | `/cron` `/定时` | 查看/管理定时任务 |",
-			"| `/心跳` | `/heartbeat` | 查看/管理心跳系统 |",
+			"**会话管理**",
+			`- ${c("/会话", "/sessions")} — 查看最近会话列表`,
+			`- \`/会话 编号\` — 切换到指定会话`,
+			`- ${c("/新对话", "/new")} — 归档当前会话，开启新对话`,
 			"",
-			"**项目路由：**",
-			"发送 `项目名:消息` 指定工作区，如 `openclaw:帮我看看这个bug`",
+			"**模型与密钥**",
+			`- ${c("/模型", "/model")} — 查看/切换 AI 模型`,
+			`- ${c("/密钥", "/apikey")} — 查看/更换 API Key（仅私聊）`,
+			"  用法：`/密钥 key_xxx...`",
 			"",
-			`当前可用项目：${Object.keys(projectsConfig.projects).map((k) => `\`${k}\``).join("、")}`,
-			`默认项目：\`${projectsConfig.default_project}\``,
+			"**记忆系统**",
+			`- ${c("/记忆", "/memory")} — 查看记忆状态`,
+			`- \`/记忆 关键词\` — 语义搜索记忆`,
+			`- \`/记录 内容\` — 写入今日日记`,
+			`- ${c("/整理记忆", "/reindex")} — 重建记忆索引`,
+			"",
+			"**定时任务**",
+			`- ${c("/任务", "/cron")} — 查看所有定时任务`,
+			"- `/任务 暂停/恢复/删除/执行 ID`",
+			"- 或在对话中说「每天早上9点做XX」由 AI 自动创建",
+			"",
+			"**心跳系统**",
+			`- ${c("/心跳", "/heartbeat")} — 查看心跳状态`,
+			"- `/心跳 开启/关闭/执行`",
+			"- `/心跳 间隔 分钟数`",
+			"",
+			"**项目路由**",
+			`发送 \`项目名:消息\` 指定工作区，如 \`openclaw:帮我看看这个bug\``,
+			`可用项目：${Object.keys(projectsConfig.projects).map((k) => `\`${k}\``).join("、")}（默认：\`${projectsConfig.default_project}\`）`,
 		].join("\n");
-		await replyCard(messageId, helpText, { title: "使用帮助", color: "blue" });
+		await replyCard(messageId, helpText, { title: "📖 使用帮助", color: "blue" });
 		return;
 	}
 
@@ -1212,14 +1354,18 @@ async function handleInner(
 		const keyPreview = config.CURSOR_API_KEY ? `\`...${config.CURSOR_API_KEY.slice(-8)}\`` : "**未设置**";
 		const sttStatus = config.VOLC_STT_APP_ID ? "火山引擎豆包大模型" : (existsSync(WHISPER_MODEL) ? "本地 whisper" : "不可用");
 		const projects = Object.entries(projectsConfig.projects).map(([k, v]) => `  \`${k}\` → ${v.path}`).join("\n");
-		const sessions = [...sessionIds.entries()].map(([ws, sid]) => {
-			const name = Object.entries(projectsConfig.projects).find(([, v]) => v.path === ws)?.[0] || ws;
-			return `  \`${name}\` → ${sid.slice(0, 12)}...`;
-		}).join("\n") || "  (无活跃会话)";
+		const sessions = [...sessionsStore.entries()]
+			.filter(([, s]) => s.active)
+			.map(([ws, s]) => {
+				const name = Object.entries(projectsConfig.projects).find(([, v]) => v.path === ws)?.[0] || ws;
+				const entry = s.history.find((h) => h.id === s.active);
+				const info = entry ? ` · ${entry.summary.slice(0, 30)}` : "";
+				return `  \`${name}\` → ${s.active!.slice(0, 12)}...${info}`;
+			}).join("\n") || "  (无活跃会话)";
 		const memStatus = memory
 			? (() => {
 				const stats = memory.getStats();
-				return `向量记忆（${stats.chunks} 块, ${stats.files} 文件, ${stats.cachedEmbeddings} 缓存）`;
+				return `全工作区索引（${stats.chunks} 块, ${stats.files} 文件, ${stats.cachedEmbeddings} 嵌入缓存）`;
 			})()
 			: "未启用";
 		const statusText = [
@@ -1320,16 +1466,22 @@ async function handleInner(
 		if (!query) {
 			const summary = memory.getRecentSummary(3);
 			const stats = memory.getStats();
+			const fileList = stats.filePaths.length > 0
+				? stats.filePaths.slice(0, 25).map((p) => `- \`${p}\``).join("\n") + (stats.filePaths.length > 25 ? `\n- …及其他 ${stats.filePaths.length - 25} 个文件` : "")
+				: "（尚未索引，请发送 `/整理记忆`）";
 			const statusText = [
 				`**记忆索引：** ${stats.chunks} 块（${stats.files} 文件, ${stats.cachedEmbeddings} 嵌入缓存）`,
+				`**索引范围：** 工作区全部文本文件（.md .txt .html .json .mdc 等）`,
 				`**嵌入模型：** ${config.VOLC_EMBEDDING_MODEL}`,
 				"",
 				"**用法：**",
 				"- `/记忆 关键词` — 语义搜索记忆",
 				"- `/记录 内容` — 写入今日日记",
-				"- `/整理记忆` — 重建索引",
+				"- `/整理记忆` — 重建全工作区索引",
 				"",
-				summary ? `**最近记忆摘要：**\n\n${summary.slice(0, 2000)}` : "（暂无记忆文件）",
+				`**已索引文件：**\n${fileList}`,
+				"",
+				summary ? `**最近记忆摘要：**\n\n${summary.slice(0, 1500)}` : "（暂无记忆文件）",
 			].join("\n");
 			await replyCard(messageId, statusText, { title: "🧠 记忆系统", color: "purple" });
 			return;
@@ -1337,7 +1489,7 @@ async function handleInner(
 		try {
 			const results = await memory.search(query, 5);
 			if (results.length === 0) {
-				await replyCard(messageId, `未找到与「${query}」相关的记忆。\n\n记忆文件：\`MEMORY.md\` + \`memory/*.md\``, { title: "无匹配", color: "grey" });
+				await replyCard(messageId, `未找到与「${query}」相关的记忆。\n\n索引范围：工作区全部文本文件（发 \`/整理记忆\` 可刷新）`, { title: "无匹配", color: "grey" });
 				return;
 			}
 			const lines = results.map((r, i) =>
@@ -1363,18 +1515,27 @@ async function handleInner(
 		return;
 	}
 
-	// /整理记忆 → 重建记忆索引
+	// /整理记忆 → 重建全工作区记忆索引
 	if (/^\/(整理记忆|reindex|索引)\s*$/i.test(text.trim())) {
 		if (!memory) {
 			await replyCard(messageId, "记忆系统未初始化。", { title: "不可用", color: "orange" });
 			return;
 		}
-		const reindexCardId = await replyCard(messageId, "⏳ 正在重建记忆索引...", { title: "索引中", color: "wathet" });
+		const reindexCardId = await replyCard(messageId, "⏳ 正在扫描并索引工作区全部文本文件...", { title: "全工作区索引中", color: "wathet" });
 		try {
 			const count = await memory.index();
-			const msg = `索引完成: **${count}** 个记忆块\n\n嵌入模型: \`${config.VOLC_EMBEDDING_MODEL}\``;
-			if (reindexCardId) await updateCard(reindexCardId, msg, { title: "✅ 索引完成", color: "green" });
-			else await replyCard(messageId, msg, { title: "✅ 索引完成", color: "green" });
+			const stats = memory.getStats();
+			const msg = [
+				`索引完成: **${count}** 个记忆块（来自 **${stats.files}** 个文件）`,
+				`嵌入缓存: ${stats.cachedEmbeddings} 条`,
+				`嵌入模型: \`${config.VOLC_EMBEDDING_MODEL}\``,
+				"",
+				"**已索引文件：**",
+				...stats.filePaths.slice(0, 25).map((p) => `- \`${p}\``),
+				...(stats.filePaths.length > 25 ? [`- …及其他 ${stats.filePaths.length - 25} 个文件`] : []),
+			].join("\n");
+			if (reindexCardId) await updateCard(reindexCardId, msg, { title: "✅ 全工作区索引完成", color: "green" });
+			else await replyCard(messageId, msg, { title: "✅ 全工作区索引完成", color: "green" });
 		} catch (e) {
 			const msg = `索引失败: ${e instanceof Error ? e.message : e}`;
 			if (reindexCardId) await updateCard(reindexCardId, msg, { title: "索引失败", color: "red" });
@@ -1528,20 +1689,77 @@ async function handleInner(
 		return;
 	}
 
-	// /new、/新对话、/新会话 → 重置会话
+	// /new、/新对话、/新会话 → 归档当前会话，开启新对话
 	const { workspace, prompt, label } = route(text);
 	if (/^\/(new|新对话|新会话)\s*$/i.test(prompt.trim())) {
-		resetSession(workspace);
-		const msg = `**[${label}]** 新会话已开始，下一条消息将创建全新对话。`;
+		archiveAndResetSession(workspace);
+		const historyCount = getSessionHistory(workspace).length;
+		const hint = historyCount > 0 ? `\n\n历史会话已保留（共 ${historyCount} 个），发送 \`/会话\` 可查看和切换。` : "";
+		const msg = `**[${label}]** 新会话已开始，下一条消息将创建全新对话。${hint}`;
 		if (cardId) await updateCard(cardId, msg, { title: "新会话", color: "blue" });
 		else await replyCard(messageId, msg, { title: "新会话", color: "blue" });
+		return;
+	}
+
+	// /会话、/sessions → 列出历史会话 / 切换会话
+	const sessionCmdMatch = prompt.match(/^\/(会话|sessions?)[\s:：]*(.*)/i);
+	if (sessionCmdMatch) {
+		const subArg = sessionCmdMatch[2].trim();
+		const history = getSessionHistory(workspace, 10);
+		const activeId = getActiveSessionId(workspace);
+
+		if (!subArg) {
+			if (history.length === 0) {
+				await replyCard(messageId, "暂无历史会话。\n\n开始对话后会自动记录，发送 `/新对话` 可归档当前会话。", { title: "💬 会话列表", color: "blue" });
+				return;
+			}
+			const lines: string[] = [];
+			lines.push(`**工作区：** \`${label}\`\n`);
+			for (let i = 0; i < history.length; i++) {
+				const h = history[i];
+				const isCurrent = h.id === activeId;
+				const icon = isCurrent ? "🔵" : "⚪";
+				const tag = isCurrent ? " ← **当前**" : "";
+				const time = formatRelativeTime(h.lastActiveAt);
+				lines.push(`${icon} **${i + 1}.** ${h.summary}${tag}\n   ${time} · \`${h.id.slice(0, 8)}\``);
+			}
+			lines.push("", "---", "切换：`/会话 编号`　　新建：`/新对话`");
+			await replyCard(messageId, lines.join("\n"), { title: "💬 会话列表", color: "blue" });
+			return;
+		}
+
+		// /会话 N → 切换到第 N 个
+		const num = Number.parseInt(subArg, 10);
+		if (!Number.isNaN(num) && num >= 1 && num <= history.length) {
+			const target = history[num - 1];
+			if (target.id === activeId) {
+				await replyCard(messageId, `当前已是会话 #${num}：${target.summary}`, { title: "无需切换", color: "blue" });
+				return;
+			}
+			switchToSession(workspace, target.id);
+			await replyCard(messageId, `已切换到会话 #${num}：**${target.summary}**\n\n下一条消息将在此会话中继续对话。\n\`${target.id.slice(0, 12)}\` · ${formatRelativeTime(target.lastActiveAt)}`, { title: "💬 已切换", color: "green" });
+			console.log(`[Session] 切换到 ${target.id.slice(0, 12)} (${target.summary})`);
+			return;
+		}
+
+		// /会话 ID前缀 → 按 ID 前缀匹配
+		if (subArg.length >= 4) {
+			const target = history.find((h) => h.id.startsWith(subArg));
+			if (target) {
+				switchToSession(workspace, target.id);
+				await replyCard(messageId, `已切换到：**${target.summary}**\n\n\`${target.id.slice(0, 12)}\` · ${formatRelativeTime(target.lastActiveAt)}`, { title: "💬 已切换", color: "green" });
+				return;
+			}
+		}
+
+		await replyCard(messageId, `未找到编号 ${subArg} 的会话。\n\n发送 \`/会话\` 查看可用列表。`, { title: "未找到", color: "orange" });
 		return;
 	}
 
 	// 未知 / 指令 → 友好提示
 	if (text.startsWith("/")) {
 		const cmd = text.split(/[\s:：]/)[0];
-		await replyCard(messageId, `未知指令 \`${cmd}\`\n\n发送 \`/help\` 查看所有可用指令。`, { title: "未知指令", color: "orange" });
+		await replyCard(messageId, `未知指令 \`${cmd}\`\n\n发送 \`/帮助\` 查看所有可用指令。`, { title: "未知指令", color: "orange" });
 		return;
 	}
 
@@ -1570,23 +1788,8 @@ async function handleInner(
 	console.log(`[Agent] 调用 Cursor CLI workspace=${workspace} model=${model} card=${cardId}`);
 	const taskStart = Date.now();
 
-	// 记忆系统：仅在会话首条消息注入，后续消息跳过（Cursor --resume 已有上下文）
-	let enrichedPrompt = prompt;
-	const isNewSession = !sessionIds.has(workspace);
+	// 记忆由 Cursor 自主通过 memory-tool.ts 调用，server 不注入
 	if (memory) {
-		if (isNewSession) {
-			try {
-				const memCtx = await memory.getContextForPrompt(prompt);
-				if (memCtx) {
-					enrichedPrompt = prompt + memCtx;
-					console.log(`[记忆] 新会话，注入 ${memCtx.length} 字符上下文`);
-				}
-			} catch (e) {
-				console.warn(`[记忆] 搜索失败（跳过）: ${e}`);
-			}
-		} else {
-			console.log("[记忆] 已有会话，跳过注入");
-		}
 		memory.appendSessionLog(workspace, "user", prompt, model);
 	}
 
@@ -1614,7 +1817,7 @@ async function handleInner(
 		: undefined;
 
 	try {
-		const { result, quotaWarning } = await runAgent(workspace, enrichedPrompt, { onProgress, onStart });
+		const { result, quotaWarning } = await runAgent(workspace, prompt, { onProgress, onStart, sessionSummary: prompt.slice(0, 60) });
 		const usedModel = quotaWarning ? "auto" : model;
 		const elapsed = formatElapsed(Math.round((Date.now() - taskStart) / 1000));
 		console.log(`[${new Date().toISOString()}] 完成 [${label}] model=${usedModel} elapsed=${elapsed} (${result.length} chars)`);
@@ -1629,15 +1832,54 @@ async function handleInner(
 
 		const fullResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${result}` : result;
 		const doneTitle = quotaWarning ? `完成 · ${elapsed}` : `完成 · ${elapsed}`;
+		const doneColor = quotaWarning ? "orange" : "green";
 
+		// 尝试发送 AI 结果到飞书卡片
+		let sendOk = false;
 		if (cardId && fullResult.length <= CARD_MAX) {
-			await updateCard(cardId, fullResult, { title: doneTitle, color: quotaWarning ? "orange" : "green" });
-		} else {
+			const { ok, error } = await updateCard(cardId, fullResult, { title: doneTitle, color: doneColor });
+			if (ok) {
+				sendOk = true;
+			} else {
+				// 卡片更新失败 → 让大模型知道，自己重新组织回复
+				console.log(`[重发] 卡片更新失败: ${error}，通知 AI 重新回复`);
+				await updateCard(cardId, `⏳ 回复格式超出飞书限制，正在重新组织...`, { title: "重新组织中", color: "wathet" });
+
+				const retryPrompt = [
+					"你的上一条回复发送到飞书时失败了。",
+					`失败原因：${error}`,
+					"",
+					"飞书卡片的限制：",
+					"- 单张卡片最多 5 个 Markdown 表格（这是最常见的失败原因）",
+					"- 卡片 JSON 总大小不超过 30KB（约 3500 中文字符）",
+					"",
+					"请重新回复刚才的内容，但要：",
+					"1. 表格最多用 3 个，其余改用列表（- 项目符号）",
+					"2. 精简文字，控制在 3000 字以内",
+					"3. 如果内容确实很多，先给核心结论，末尾说「需要我继续展开吗？」",
+					"4. 不要解释为什么格式变了，直接给内容",
+				].join("\n");
+
+				try {
+					const { result: retryResult } = await runAgent(workspace, retryPrompt, { onProgress });
+					const retryElapsed = formatElapsed(Math.round((Date.now() - taskStart) / 1000));
+					const { ok: retryOk } = await updateCard(cardId, retryResult, { title: `完成 · ${retryElapsed}`, color: doneColor });
+					if (retryOk) {
+						sendOk = true;
+						console.log(`[重发] AI 重新回复成功 (${retryResult.length} chars)`);
+					} else {
+						console.warn("[重发] AI 重新回复后仍然超限，回退纯文本分片");
+					}
+				} catch (retryErr) {
+					console.error("[重发] AI 重试失败:", retryErr);
+				}
+			}
+		}
+
+		// 卡片发送失败或内容过长 → 回退分片发送
+		if (!sendOk) {
 			if (cardId) {
-				await updateCard(cardId, quotaWarning || "执行完成，结果见下方", {
-					title: doneTitle,
-					color: quotaWarning ? "orange" : "green",
-				});
+				await updateCard(cardId, quotaWarning || "执行完成，结果见下方", { title: doneTitle, color: doneColor });
 			}
 			await replyLongMessage(messageId, chatId, result, { title: doneTitle, color: "green" });
 		}
@@ -1711,7 +1953,7 @@ const memEngine = memory ? `豆包 Embedding (${config.VOLC_EMBEDDING_MODEL})` :
 console.log(`
 ┌──────────────────────────────────────────────────┐
 │  飞书 → Cursor Agent 中继服务 v5                 │
-│  记忆体系: OpenClaw 风格 (SOUL + MEMORY)         │
+│  架构: OpenClaw 风格 (rules 自动加载)            │
 ├──────────────────────────────────────────────────┤
 │  模型: ${config.CURSOR_MODEL}
 │  Key:  ...${config.CURSOR_API_KEY.slice(-8)}
@@ -1722,9 +1964,11 @@ console.log(`
 │  调度: cron-jobs.json (文件监听)
 │  心跳: 默认关闭（飞书 /心跳 开启）
 │
-│  身份文件: SOUL.md, IDENTITY.md, USER.md
-│  记忆文件: MEMORY.md, memory/*.md
-│  规则: .cursor/rules/*.mdc
+│  规则（每次会话自动加载）:
+│    soul.mdc, agent-identity.mdc, user-context.mdc
+│    workspace-rules.mdc, tools.mdc, memory-protocol.mdc
+│    scheduler-protocol.mdc, cursor-capabilities.mdc
+│  记忆索引: 全工作区文本文件（memory-tool.ts）
 │
 │  回复: 互动卡片 + 消息更新
 │  直连: 飞书消息 → Cursor CLI（stream-json + --resume）
@@ -1739,8 +1983,7 @@ ${list}
 // 启动定时任务调度器
 scheduler.start().catch((e) => console.warn(`[调度] 启动失败: ${e}`));
 
-// 心跳默认关闭，通过飞书 /心跳 开启 指令启用
-// heartbeat.start();
+heartbeat.start();
 
 ws.start({ eventDispatcher: dispatcher });
 console.log("飞书长连接已启动，等待消息...");

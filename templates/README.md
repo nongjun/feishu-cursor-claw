@@ -30,7 +30,7 @@ Cursor Agent 天生就有文件操作、Shell 执行、网络搜索、浏览器�
 | 文件 | 用途 | 是否需要定制 |
 |------|------|------------|
 | `MEMORY.md` | 长期记忆 | AI 自动维护，也可手动编辑 |
-| `HEARTBEAT.md` | 心跳检查清单 | 按需添加你的检查项 |
+| `HEARTBEAT.md` | 心跳检查清单 | AI 自动管理，也可手动编辑 |
 | `TASKS.md` | 定时任务说明 | 参考文档 |
 
 ### Cursor 规则
@@ -40,6 +40,7 @@ Cursor Agent 天生就有文件操作、Shell 执行、网络搜索、浏览器�
 | `.cursor/rules/agent-identity.mdc` | 身份加载 + 能力声明 |
 | `.cursor/rules/memory-protocol.mdc` | 记忆读写协议 |
 | `.cursor/rules/scheduler-protocol.mdc` | 定时任务创建协议 |
+| `.cursor/rules/heartbeat-protocol.mdc` | 心跳协议（触发、后台工作、自动管理 HEARTBEAT.md） |
 | `.cursor/rules/cursor-capabilities.mdc` | Cursor 原生能力使用引导 |
 
 ## 使用方式

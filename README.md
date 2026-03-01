@@ -46,9 +46,10 @@ Phone (Feishu) ──WebSocket──→ feishu-cursor ──Cursor CLI──→ 
 - **Smart error guidance**: auth failures auto-display fix steps with dashboard links
 - **Model fallback**: billing errors auto-downgrade to `auto` model with notification
 - **Memory system v2**: OpenClaw-style identity + memory with embedding cache, incremental indexing, FTS5 BM25 keyword search, and vector hybrid search
-- **Smart memory injection**: memory context injected only on the first message of each session (subsequent messages skip injection — Cursor already has context via `--resume`)
+- **Autonomous memory**: Cursor decides when to search memories via `memory-tool.ts` (no server-side injection — the AI is in control)
+- **Rules-based context**: all identity, personality, and workspace rules are loaded via `.cursor/rules/*.mdc` — no extra tool calls needed at session start
 - **Scheduled tasks**: AI-created cron jobs via `cron-jobs.json` — supports one-shot, interval, and cron expressions
-- **Heartbeat system**: periodic AI check-in via `HEARTBEAT.md` with active hours support
+- **Heartbeat system**: periodic AI check-in via `HEARTBEAT.md` with active hours, background maintenance, and AI auto-management of the checklist
 - **Auto workspace init**: first run auto-copies identity/memory templates to your workspace
 
 ## Quick Start
@@ -160,53 +161,53 @@ Inspired by [OpenClaw](https://github.com/openclaw/openclaw), the bot includes a
 
 ### Architecture
 
-```
-templates/                   Shipped with the repo (factory defaults)
-├── SOUL.md                  Personality & principles
-├── IDENTITY.md              Name, emoji, vibe
-├── AGENTS.md                Workspace operating rules
-├── USER.md                  Owner profile & preferences
-├── TOOLS.md                 Cursor-native capabilities & tool memo
-├── MEMORY.md                Long-term memory skeleton
-├── HEARTBEAT.md             Heartbeat checklist template
-├── TASKS.md                 Scheduled tasks documentation
-└── .cursor/rules/           Cursor rule files
-    ├── agent-identity.mdc   Identity + capability declaration
-    ├── memory-protocol.mdc  Memory read/write protocol
-    ├── scheduler-protocol.mdc  Scheduled task creation protocol
-    └── cursor-capabilities.mdc  Cursor-native capability guide
+Like OpenClaw, all identity/personality/rules are injected at session start. In our case, Cursor's `.mdc` rules with `alwaysApply: true` serve as the injection mechanism — no server-side prompt manipulation needed.
 
-~/your-workspace/            User's actual workspace (auto-initialized)
-├── SOUL.md                  Customized personality
-├── IDENTITY.md              Your AI's identity
-├── USER.md                  Your personal profile
-├── MEMORY.md                Real memories (auto-updated)
-├── memory/                  Daily logs (YYYY-MM-DD.md)
-├── sessions/                Conversation transcripts (YYYY-MM-DD.jsonl)
-├── .memory.sqlite           Vector embeddings database
-├── HEARTBEAT.md             Heartbeat checklist (AI reads periodically)
-├── TASKS.md                 Task documentation
-└── cron-jobs.json           Scheduled tasks (AI-writable)
+```
+templates/                        Shipped with the repo (factory defaults)
+├── MEMORY.md                     Long-term memory skeleton
+├── HEARTBEAT.md                  Heartbeat checklist template
+├── TASKS.md                      Scheduled tasks documentation
+└── .cursor/rules/                Cursor rules (auto-loaded every session)
+    ├── soul.mdc                  Personality, principles, style
+    ├── agent-identity.mdc        Identity metadata + Feishu output limits
+    ├── user-context.mdc          Owner profile & preferences
+    ├── workspace-rules.mdc       Security, operation boundaries, memory philosophy
+    ├── tools.mdc                 Full capability list, servers, Feishu bridge
+    ├── memory-protocol.mdc       Memory tool usage (search/write/index)
+    ├── scheduler-protocol.mdc    Scheduled task creation protocol
+    ├── heartbeat-protocol.mdc    Heartbeat protocol (triggers, background work, auto-management)
+    └── cursor-capabilities.mdc   Capability decision tree
+
+~/your-workspace/                 User's actual workspace (auto-initialized)
+├── .cursor/rules/*.mdc           Customized rules (auto-loaded)
+├── MEMORY.md                     Real memories (AI-maintained)
+├── HEARTBEAT.md                  Heartbeat checklist
+├── TASKS.md                      Task documentation
+├── memory/                       Daily logs (YYYY-MM-DD.md)
+├── sessions/                     Conversation transcripts (YYYY-MM-DD.jsonl)
+├── .memory.sqlite                Vector embeddings database
+└── cron-jobs.json                Scheduled tasks (AI-writable)
 ```
 
 ### How It Works
 
-1. **First run**: `server.ts` auto-copies templates to your workspace (skips existing files)
-2. **Session start**: bot searches memories via vector + FTS5 BM25 hybrid search, injects relevant context into the first message
-3. **Within a session**: subsequent messages skip memory injection (Cursor retains context via `--resume`)
+1. **First run**: `server.ts` auto-copies rule templates to your workspace (skips existing files)
+2. **Every session**: Cursor CLI auto-loads all `.mdc` rules — identity, personality, tools, and constraints are in context from the start
+3. **Memory access**: Cursor autonomously calls `memory-tool.ts` via shell when it needs past context (no server-side injection)
 4. **After each reply**: user message + assistant reply logged to session history
 5. **Incremental indexing**: only re-embeds files that have actually changed (tracked by content hash)
-6. **Embedding cache**: same text chunk is never sent to the embedding API twice
+6. **Full workspace indexing**: all text files in the workspace are indexed (`.md`, `.txt`, `.html`, `.json`, `.mdc`, etc.)
 7. **Feishu commands**: `/memory`, `/log`, `/reindex` for manual memory operations
-8. **Cursor rules**: `.cursor/rules/*.mdc` tell Cursor to read identity/memory files on session start
 
 ### Customization
 
-Edit your workspace files to personalize:
+Edit the `.cursor/rules/*.mdc` files in your workspace to personalize:
 
-- **`IDENTITY.md`** — give your AI a name, emoji, and personality
-- **`USER.md`** — fill in your info so the AI serves you better
-- **`SOUL.md`** — adjust core principles and behavioral boundaries
+- **`agent-identity.mdc`** — give your AI a name, emoji, and personality
+- **`user-context.mdc`** — fill in your info so the AI serves you better
+- **`soul.mdc`** — adjust core principles and behavioral boundaries
+- **`tools.mdc`** — add servers, tools, and capability notes
 - **`MEMORY.md`** — the AI maintains this automatically, but you can edit it too
 
 ## Roadmap
@@ -220,7 +221,9 @@ Phase 1: Bridge ✅ (current)
   ✅ Security (group chat protection, smart error guidance)
 
 Phase 2: Smart Agent
-  ✅ Persistent memory v2 (embedding cache, incremental indexing, FTS5 BM25, session-first injection)
+  ✅ Persistent memory v2 (embedding cache, incremental indexing, FTS5 BM25, full workspace indexing)
+  ✅ Autonomous memory (Cursor calls memory-tool.ts on demand — no server-side injection)
+  ✅ Rules-based context (OpenClaw-style bootstrap via .cursor/rules/*.mdc — auto-loaded every session)
   ✅ Heartbeat monitoring (HEARTBEAT.md + configurable intervals + active hours)
   ✅ Scheduled tasks (AI-created cron jobs via cron-jobs.json file watching)
   🔲 Multi-user isolation (Feishu user_id → independent workspace/session)
@@ -304,38 +307,52 @@ bun run server.ts
 
 灵感来自 [OpenClaw](https://github.com/openclaw/openclaw)，为你的 AI 赋予持久人格和长期记忆。
 
-### 文件结构
+### 规则文件（每次会话自动加载）
 
-| 文件 | 用途 | 是否需要定制 |
-|------|------|------------|
-| `SOUL.md` | AI 的灵魂和人格 | 可选（默认已有不错的通用人格） |
-| `IDENTITY.md` | 名字、Emoji、气质 | **推荐**（给你的 AI 一个身份） |
-| `AGENTS.md` | 工作区操作规范 | 可选 |
-| `USER.md` | 你的个人信息和偏好 | **推荐**（帮 AI 更好地服务你） |
-| `TOOLS.md` | 工具使用备忘 | 按需添加 |
-| `MEMORY.md` | 长期记忆 | AI 自动维护，也可手动编辑 |
-| `memory/*.md` | 每日日记 | 自动生成 |
-| `sessions/*.jsonl` | 会话转录 | 自动记录 |
+和 OpenClaw 一样，所有身份/人格/规范在会话开始时自动注入上下文。Cursor 的 `.mdc` 规则（`alwaysApply: true`）就是注入机制——中继服务不做任何提示词拼接。
+
+| 规则文件 | 用途 | 是否需要定制 |
+|---------|------|------------|
+| `soul.mdc` | AI 的灵魂、人格、原则 | 可选（默认已有不错的通用人格） |
+| `agent-identity.mdc` | 身份元数据 + 飞书输出限制 | **推荐**（给 AI 起个名字） |
+| `user-context.mdc` | 你的个人信息和偏好 | **推荐**（帮 AI 更好地服务你） |
+| `workspace-rules.mdc` | 安全规则、操作边界 | 可选 |
+| `tools.mdc` | 完整能力清单、服务器 | 按需添加 |
+| `memory-protocol.mdc` | 记忆工具使用方法 | 一般不用改 |
+| `scheduler-protocol.mdc` | 定时任务协议 | 一般不用改 |
+| `heartbeat-protocol.mdc` | 心跳协议（触发、后台工作、自动管理） | 一般不用改 |
+| `cursor-capabilities.mdc` | 能力决策树 | 一般不用改 |
+
+### 数据文件
+
+| 文件 | 用途 |
+|------|------|
+| `MEMORY.md` | 长期记忆（AI 自动维护，也可手动编辑） |
+| `HEARTBEAT.md` | 心跳检查清单（AI 自主管理和更新） |
+| `memory/*.md` | 每日日记（自动生成） |
+| `sessions/*.jsonl` | 会话转录（自动记录） |
+| `.memory.sqlite` | 向量嵌入数据库 |
+| `cron-jobs.json` | 定时任务（AI 可写入） |
 
 ### 工作原理
 
-1. **首次启动**：`server.ts` 自动将 `templates/` 中的模板复制到你的工作区（已有文件不覆盖）
-2. **新会话首条消息**：向量 + FTS5 BM25 混合搜索相关记忆，注入上下文
-3. **会话内后续消息**：跳过记忆注入（Cursor 通过 `--resume` 保持上下文）
-4. **每条消息**：用户消息 + AI 回复自动记录到会话日志
-5. **增量索引**：仅对内容变化的文件重新嵌入（按内容 hash 追踪）
-6. **嵌入缓存**：相同文本块永远不会重复调用嵌入 API
-7. **Cursor 规则**：`.cursor/rules/*.mdc` 指导 Cursor 在会话开始时读取身份和记忆文件
-8. **定时任务**：Cursor Agent 可写入 `cron-jobs.json` 自动创建定时任务，到期自动执行并飞书通知
-9. **心跳检查**：定期读取 `HEARTBEAT.md` 检查清单，有异常自动通知
+1. **首次启动**：自动将 `templates/` 中的规则和数据模板复制到工作区（已有文件不覆盖）
+2. **每次会话**：Cursor CLI 自动加载所有 `.mdc` 规则——身份、人格、工具、约束从一开始就在上下文中
+3. **记忆访问**：Cursor 自主通过 shell 调用 `memory-tool.ts` 搜索记忆（中继服务不注入——AI 自己决定何时需要回忆）
+4. **每条消息**：直接传给 Cursor，不拼接任何东西；用户消息 + AI 回复自动记录到会话日志
+5. **全工作区索引**：工作区中所有文本文件都被索引（`.md` `.txt` `.html` `.json` `.mdc` 等）
+6. **增量索引**：仅对变化的文件重新嵌入（按内容 hash 追踪），相同文本永不重复调 API
+7. **定时任务**：AI 写入 `cron-jobs.json` 创建定时任务，到期自动执行并飞书通知
+8. **心跳系统**：定期触发 AI 执行 `HEARTBEAT.md` 清单，AI 可自主做后台维护（整理记忆、检查项目、更新文档），并自动管理和优化检查清单
 
 ### 定制
 
-编辑工作区里的文件即可个性化：
+编辑 `.cursor/rules/` 下的 `.mdc` 文件即可个性化：
 
-- `IDENTITY.md` — 给你的 AI 起个名字
-- `USER.md` — 填入你的信息
-- `SOUL.md` — 调整核心原则和行为边界
+- `agent-identity.mdc` — 给你的 AI 起个名字
+- `user-context.mdc` — 填入你的信息
+- `soul.mdc` — 调整核心原则和行为边界
+- `tools.mdc` — 添加服务器、工具备忘
 
 ## 定时任务与心跳
 
@@ -359,7 +376,12 @@ bun run server.ts
 
 ### 心跳系统
 
-编辑 `HEARTBEAT.md` 添加检查项，然后开启心跳：
+心跳系统每 30 分钟自动触发 AI 执行检查和后台维护。AI 会：
+
+- 读取 `HEARTBEAT.md` 检查清单，逐项执行
+- 做后台工作（整理记忆、检查项目状态、更新文档）
+- 自主管理 `HEARTBEAT.md`（清单过时时自动更新）
+- 无事回复 `HEARTBEAT_OK`，有值得告知的事通过飞书通知
 
 | 指令 | 说明 |
 |------|------|
@@ -368,7 +390,7 @@ bun run server.ts
 | `/心跳 间隔 30` | 设为每 30 分钟 |
 | `/心跳 执行` | 立即检查一次 |
 
-心跳检查时 AI 阅读 `HEARTBEAT.md`，一切正常回复 `HEARTBEAT_OK`，有异常自动飞书通知。
+详细的心跳协议见 `.cursor/rules/heartbeat-protocol.mdc`。
 
 ## 语音识别配置
 
@@ -388,7 +410,7 @@ bun run server.ts
 
 1. 在 `.env` 中设置 `VOLC_EMBEDDING_API_KEY`
 2. 默认模型：`doubao-embedding-vision-250615`（无需修改）
-3. 首次启动自动索引工作区的 `MEMORY.md` 和 `memory/*.md`
+3. 首次启动自动索引工作区全部文本文件（`.md` `.txt` `.html` `.json` `.mdc` `.csv` `.xml` `.yaml` `.toml` 等，自动跳过 `.git`、`node_modules`、超大文件等）
 
 ## 项目路由
 
