@@ -85,6 +85,26 @@ You should see:
 
 Send a message to your Feishu bot and watch Cursor work.
 
+### 4. Auto-Start on Boot (Recommended)
+
+```bash
+bash service.sh install    # install + start via macOS launchd
+bash service.sh status     # check if running
+bash service.sh logs       # follow live logs
+```
+
+The service auto-restarts on crash and starts on boot — no manual intervention needed.
+
+| Command | Description |
+|---------|-------------|
+| `bash service.sh install` | Install auto-start and launch now |
+| `bash service.sh uninstall` | Remove auto-start and stop |
+| `bash service.sh start` | Start the service |
+| `bash service.sh stop` | Stop the service |
+| `bash service.sh restart` | Restart the service |
+| `bash service.sh status` | Show running status |
+| `bash service.sh logs` | Tail live logs |
+
 ## Feishu Commands
 
 All commands support Chinese aliases:
@@ -275,8 +295,11 @@ cp .env.example .env
 ### 启动
 
 ```bash
-bun run server.ts
+bun run server.ts            # 手动启动（调试用）
+bash service.sh install      # 安装开机自启动（推荐）
 ```
+
+安装自启动后，重启电脑会自动运行，崩溃也会自动恢复。管理命令见「日常运维」。
 
 ### 飞书机器人配置
 
@@ -430,16 +453,36 @@ bun run server.ts
 
 ## 日常运维
 
+### 服务管理（推荐）
+
+使用 `service.sh` 管理服务，基于 macOS launchd，开机自启 + 崩溃自动恢复：
+
+```bash
+bash service.sh install    # 安装自启动并立即启动
+bash service.sh status     # 查看运行状态
+bash service.sh restart    # 重启服务
+bash service.sh logs       # 查看实时日志
+bash service.sh uninstall  # 卸载自启动
+```
+
+### 手动运行（调试用）
+
+```bash
+bun run server.ts                                        # 前台运行
+nohup bun run server.ts > /tmp/feishu-cursor.log 2>&1 &  # 后台运行
+```
+
+### 其他
+
 - **换 Key / 换模型**：飞书发 `/密钥 key_xxx...` 或 `/模型 sonnet-4`，无需重启
-- **后台运行**：`nohup bun run server.ts > /tmp/feishu-cursor.log 2>&1 &`
-- **查看日志**：`tail -f /tmp/feishu-cursor.log`
+- **查看日志**：`bash service.sh logs` 或 `tail -f /tmp/feishu-cursor.log`
 - **API Key 失效**：飞书卡片会自动提示修复步骤 + Dashboard 链接
 
 ## 故障排查
 
 | 问题 | 解决 |
 |------|------|
-| 飞书无响应 | `ps aux \| grep server.ts` 检查进程；node_modules 损坏时删除后重新 `bun install` |
+| 飞书无响应 | `bash service.sh status` 检查进程；`bash service.sh restart` 重启；node_modules 损坏时删除后重新 `bun install` |
 | API Key 无效 | 飞书发 `/密钥 新的key`，或编辑 .env |
 | 语音识别出繁体/乱码 | 火山引擎配置有误，正在用 whisper 兜底，检查 VOLC_STT 配置 |
 | `resource not granted` | 火山引擎控制台开通「大模型流式语音识别」 |

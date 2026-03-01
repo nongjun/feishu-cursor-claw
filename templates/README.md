@@ -46,9 +46,10 @@ Cursor Agent 天生就有文件操作、Shell 执行、网络搜索、浏览器�
 ## 使用方式
 
 1. 运行 `bash setup.sh`，模板会自动复制到你配置的工作区
-2. 编辑 `IDENTITY.md` 和 `USER.md`，填入你的个人信息
-3. `MEMORY.md` 和 `memory/*.md` 会随着使用自动积累
-4. `.cursor/rules/` 下的规则文件告诉 Cursor 如何使用这些文件
+2. 运行 `bash service.sh install`，安装开机自启动
+3. 编辑 `IDENTITY.md` 和 `USER.md`，填入你的个人信息
+4. `MEMORY.md` 和 `memory/*.md` 会随着使用自动积累
+5. `.cursor/rules/` 下的规则文件告诉 Cursor 如何使用这些文件
 
 ## 记忆体系
 

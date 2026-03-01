@@ -227,18 +227,44 @@ if [[ $COPIED -gt 0 ]]; then
     echo "     $DEFAULT_WS/.cursor/rules/soul.mdc            — 调整 AI 的人格和风格"
 fi
 
+# ── 开机自启动 ──────────────────────────────────
+echo ""
+echo "🚀 配置开机自启动..."
+read -rp "是否设置开机自动启动服务？(Y/n): " AUTO_START
+AUTO_START=${AUTO_START:-Y}
+
+if [[ "$AUTO_START" =~ ^[Yy] ]]; then
+    bash "$BOT_DIR/service.sh" install
+    echo ""
+    echo "  服务管理命令:"
+    echo "    bash service.sh status    — 查看状态"
+    echo "    bash service.sh restart   — 重启服务"
+    echo "    bash service.sh logs      — 查看日志"
+    echo "    bash service.sh uninstall — 卸载自启动"
+fi
+
 # ── 完成 ─────────────────────────────────────────
 echo ""
 echo "============================================="
 echo "  ✅ 安装完成！"
 echo "============================================="
 echo ""
-echo "  启动服务:"
+if [[ "$AUTO_START" =~ ^[Yy] ]]; then
+echo "  服务已通过 launchd 自启动管理"
+echo "  重启电脑后会自动运行，无需手动启动"
+echo ""
+echo "  管理服务:  bash service.sh <命令>"
+echo "  查看日志:  bash service.sh logs"
+else
+echo "  手动启动:"
 echo "    cd \"$BOT_DIR\""
 echo "    bun run server.ts"
 echo ""
 echo "  后台运行:"
-echo "    nohup bun run server.ts > /tmp/relay.log 2>&1 &"
+echo "    nohup bun run server.ts > /tmp/feishu-cursor.log 2>&1 &"
+echo ""
+echo "  开机自启: bash service.sh install"
+fi
 echo ""
 echo "  更换 Key/模型: 直接编辑 .env（热更换）"
 echo ""
