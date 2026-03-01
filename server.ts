@@ -763,7 +763,6 @@ process.on("SIGTERM", () => {
 
 // ── Agent 执行引擎（直接 spawn CLI + stream-json）──
 const MAX_EXEC_TIMEOUT = 30 * 60 * 1000;
-const STUCK_TIMEOUT = 3 * 60 * 1000;
 const PROGRESS_INTERVAL = 2_000;
 
 interface AgentProgress {
@@ -992,12 +991,6 @@ function execAgent(
 				cleanup();
 				child.kill("SIGTERM");
 				reject(new Error(`[TIMEOUT] 执行超过 ${formatElapsed(Math.round(MAX_EXEC_TIMEOUT / 1000))}`));
-				return;
-			}
-			if (now - lastOutputTime > STUCK_TIMEOUT) {
-				cleanup();
-				child.kill("SIGTERM");
-				reject(new Error(`[IDLE] 超过 ${formatElapsed(Math.round(STUCK_TIMEOUT / 1000))} 无响应`));
 				return;
 			}
 			if (opts?.onProgress && now - lastProgressTime >= PROGRESS_INTERVAL) {
