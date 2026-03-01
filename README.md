@@ -28,7 +28,7 @@ Phone (Feishu) ──WebSocket──→ feishu-cursor ──Cursor CLI──→ 
                                     │
                              ┌──────┴──────┐
                           Scheduler    Heartbeat
-                          (cron-jobs)  (HEARTBEAT.md)
+                          (cron-jobs)  (.cursor/HEARTBEAT.md)
 ```
 
 ## Features
@@ -49,9 +49,9 @@ Phone (Feishu) ──WebSocket──→ feishu-cursor ──Cursor CLI──→ 
 - **Autonomous memory**: Cursor decides when to search memories via `memory-tool.ts` (no server-side injection — the AI is in control)
 - **Rules-based context**: all identity, personality, and workspace rules are loaded via `.cursor/rules/*.mdc` — no extra tool calls needed at session start
 - **Scheduled tasks**: AI-created cron jobs via `cron-jobs.json` — supports one-shot, interval, and cron expressions
-- **Heartbeat system**: periodic AI check-in via `HEARTBEAT.md` with active hours, background maintenance, AI auto-management of checklist, and state tracking via `heartbeat-state.json`
-- **Boot checklist**: `BOOT.md` runs once on every server start for self-checks and online notifications
-- **First-run ceremony**: `BOOTSTRAP.md` guides the AI through its "birth" — choosing a name, personality, and getting to know its owner
+- **Heartbeat system**: periodic AI check-in via `.cursor/HEARTBEAT.md` with active hours, background maintenance, AI auto-management of checklist, and state tracking via `.cursor/memory/heartbeat-state.json`
+- **Boot checklist**: `.cursor/BOOT.md` runs once on every server start for self-checks and online notifications
+- **First-run ceremony**: `.cursor/BOOTSTRAP.md` guides the AI through its "birth" — choosing a name, personality, and getting to know its owner
 - **Safety guardrails**: anti-manipulation, anti-power-seeking, and human-oversight-first rules baked into workspace rules
 - **Memory recall protocol**: mandatory memory search before answering questions about past work, decisions, or preferences
 - **Memory flush**: proactive memory persistence during long conversations to prevent context window overflow data loss
@@ -191,46 +191,52 @@ Like OpenClaw, all identity/personality/rules are injected at session start. In 
 
 ```
 templates/                        Shipped with the repo (factory defaults)
-├── BOOTSTRAP.md                  First-run ceremony (deleted after completion)
-├── BOOT.md                       Startup self-check (runs on every server start)
-├── MEMORY.md                     Long-term memory skeleton
-├── HEARTBEAT.md                  Heartbeat checklist template
-├── TASKS.md                      Scheduled tasks documentation
-└── .cursor/rules/                Cursor rules (auto-loaded every session)
-    ├── soul.mdc                  Personality, principles, style
-    ├── agent-identity.mdc        Identity metadata + Feishu output limits
-    ├── user-context.mdc          Owner profile & preferences
-    ├── workspace-rules.mdc       Safety, tool call style, operation boundaries
-    ├── tools.mdc                 Full capability list, servers, Feishu bridge
-    ├── memory-protocol.mdc       Memory recall, flush, write, maintenance
-    ├── scheduler-protocol.mdc    Scheduled task creation protocol
-    ├── heartbeat-protocol.mdc    Heartbeat protocol + state tracking
-    └── cursor-capabilities.mdc   Capability decision tree
+├── AGENTS.md                     Workspace instructions (Cursor auto-loads)
+└── .cursor/
+    ├── SOUL.md                   AI personality and principles
+    ├── IDENTITY.md               Name, emoji, temperament
+    ├── USER.md                   Owner profile and preferences
+    ├── BOOTSTRAP.md              First-run ceremony (deleted after completion)
+    ├── BOOT.md                   Startup self-check (runs on every server start)
+    ├── MEMORY.md                 Long-term memory skeleton
+    ├── HEARTBEAT.md              Heartbeat checklist template
+    ├── TASKS.md                  Scheduled tasks documentation
+    ├── TOOLS.md                  Capability list and tool notes
+    └── rules/                    Cursor rules (auto-loaded every session)
+        ├── soul.mdc              Personality, principles, style
+        ├── agent-identity.mdc    Identity metadata + Feishu output limits
+        └── ...                   (8 more rule files)
 
 ~/your-workspace/                 User's actual workspace (auto-initialized)
-├── .cursor/rules/*.mdc           Customized rules (auto-loaded)
-├── MEMORY.md                     Real memories (AI-maintained)
-├── HEARTBEAT.md                  Heartbeat checklist (AI auto-managed)
-├── BOOT.md                       Startup checklist
-├── TASKS.md                      Task documentation
-├── memory/                       Daily logs (YYYY-MM-DD.md)
-│   └── heartbeat-state.json      Heartbeat check history (auto-maintained)
-├── sessions/                     Conversation transcripts (YYYY-MM-DD.jsonl)
+├── AGENTS.md                     Workspace instructions (Cursor auto-loads from root)
+├── .cursor/
+│   ├── SOUL.md                   Customized personality
+│   ├── IDENTITY.md               AI's chosen identity
+│   ├── USER.md                   Owner's real info
+│   ├── MEMORY.md                 Real memories (AI-maintained)
+│   ├── HEARTBEAT.md              Heartbeat checklist (AI auto-managed)
+│   ├── BOOT.md                   Startup checklist
+│   ├── TASKS.md                  Task documentation
+│   ├── TOOLS.md                  Capability notes
+│   ├── memory/                   Daily logs (YYYY-MM-DD.md)
+│   │   └── heartbeat-state.json  Heartbeat check history
+│   ├── sessions/                 Conversation transcripts (YYYY-MM-DD.jsonl)
+│   └── rules/*.mdc              Customized rules (auto-loaded)
 ├── .memory.sqlite                Vector embeddings database
 └── cron-jobs.json                Scheduled tasks (AI-writable)
 ```
 
 ### How It Works
 
-1. **First run**: `server.ts` auto-copies rule templates + `BOOTSTRAP.md` to workspace; first conversation triggers the "birth ceremony" where AI chooses its name and personality
-2. **Every server start**: `BOOT.md` runs once for self-checks and optional online notification
+1. **First run**: `server.ts` auto-copies rule templates + `.cursor/BOOTSTRAP.md` to workspace; first conversation triggers the "birth ceremony" where AI chooses its name and personality
+2. **Every server start**: `.cursor/BOOT.md` runs once for self-checks and optional online notification
 3. **Every session**: Cursor CLI auto-loads all `.mdc` rules — identity, personality, safety, tools, and constraints in context from the start
-4. **Memory recall**: before answering about past work/decisions/preferences, AI searches `MEMORY.md` + `memory/*.md` (enforced by `memory-protocol.mdc`)
+4. **Memory recall**: before answering about past work/decisions/preferences, AI searches `.cursor/MEMORY.md` + `.cursor/memory/*.md` (enforced by `memory-protocol.mdc`)
 5. **Memory flush**: during long conversations, AI proactively saves key info to files before context overflow
 6. **After each reply**: user message + assistant reply logged to session history
 7. **Incremental indexing**: only re-embeds files that have actually changed (tracked by content hash)
 8. **Full workspace indexing**: all text files in the workspace are indexed (`.md`, `.txt`, `.html`, `.json`, `.mdc`, etc.)
-9. **Heartbeat state**: `memory/heartbeat-state.json` tracks check history to avoid redundant work
+9. **Heartbeat state**: `.cursor/memory/heartbeat-state.json` tracks check history to avoid redundant work
 10. **Feishu commands**: `/memory`, `/log`, `/reindex` for manual memory operations
 
 ### Customization
@@ -241,7 +247,7 @@ Edit the `.cursor/rules/*.mdc` files in your workspace to personalize:
 - **`user-context.mdc`** — fill in your info so the AI serves you better
 - **`soul.mdc`** — adjust core principles and behavioral boundaries
 - **`tools.mdc`** — add servers, tools, and capability notes
-- **`MEMORY.md`** — the AI maintains this automatically, but you can edit it too
+- **`.cursor/MEMORY.md`** — the AI maintains this automatically, but you can edit it too
 
 ## Roadmap
 
@@ -257,10 +263,10 @@ Phase 2: Smart Agent
   ✅ Persistent memory v2 (embedding cache, incremental indexing, FTS5 BM25, full workspace indexing)
   ✅ Autonomous memory (Cursor calls memory-tool.ts on demand — no server-side injection)
   ✅ Rules-based context (OpenClaw-style bootstrap via .cursor/rules/*.mdc — auto-loaded every session)
-  ✅ Heartbeat monitoring (HEARTBEAT.md + configurable intervals + active hours + state tracking)
+  ✅ Heartbeat monitoring (.cursor/HEARTBEAT.md + configurable intervals + active hours + state tracking)
   ✅ Scheduled tasks (AI-created cron jobs via cron-jobs.json file watching)
-  ✅ First-run ceremony (BOOTSTRAP.md — AI birth ritual)
-  ✅ Boot checklist (BOOT.md — startup self-checks)
+  ✅ First-run ceremony (.cursor/BOOTSTRAP.md — AI birth ritual)
+  ✅ Boot checklist (.cursor/BOOT.md — startup self-checks)
   ✅ Safety guardrails (anti-manipulation, human-oversight-first)
   ✅ Memory recall protocol (mandatory search before answering about past)
   ✅ Memory flush (proactive persistence during long conversations)
@@ -369,19 +375,19 @@ bash service.sh install      # 安装开机自启动（推荐）
 
 | 文件 | 用途 |
 |------|------|
-| `MEMORY.md` | 长期记忆（AI 自动维护，也可手动编辑） |
-| `HEARTBEAT.md` | 心跳检查清单（AI 自主管理和更新） |
-| `BOOT.md` | 启动自检清单（每次服务启动执行） |
-| `memory/*.md` | 每日日记（自动生成） |
-| `memory/heartbeat-state.json` | 心跳检查历史（自动维护） |
-| `sessions/*.jsonl` | 会话转录（自动记录） |
+| `.cursor/MEMORY.md` | 长期记忆（AI 自动维护，也可手动编辑） |
+| `.cursor/HEARTBEAT.md` | 心跳检查清单（AI 自主管理和更新） |
+| `.cursor/BOOT.md` | 启动自检清单（每次服务启动执行） |
+| `.cursor/memory/*.md` | 每日日记（自动生成） |
+| `.cursor/memory/heartbeat-state.json` | 心跳检查历史（自动维护） |
+| `.cursor/sessions/*.jsonl` | 会话转录（自动记录） |
 | `.memory.sqlite` | 向量嵌入数据库 |
 | `cron-jobs.json` | 定时任务（AI 可写入） |
 
 ### 工作原理
 
-1. **首次启动**：自动复制模板 + `BOOTSTRAP.md`（出生仪式），AI 首次对话会自我介绍并与主人建立关系
-2. **每次服务启动**：执行 `BOOT.md` 启动自检，检查配置完整性并可选发送上线通知
+1. **首次启动**：自动复制模板 + `.cursor/BOOTSTRAP.md`（出生仪式），AI 首次对话会自我介绍并与主人建立关系
+2. **每次服务启动**：执行 `.cursor/BOOT.md` 启动自检，检查配置完整性并可选发送上线通知
 3. **每次会话**：Cursor CLI 自动加载所有 `.mdc` 规则——身份、人格、安全、工具、约束从一开始就在上下文中
 4. **记忆召回**：回答关于过去工作/决策/偏好的问题前，AI 必须先搜索记忆（由 `memory-protocol.mdc` 强制执行）
 5. **记忆防丢失**：长对话中 AI 主动将关键信息写入文件，防止上下文窗口溢出导致数据丢失
@@ -389,7 +395,7 @@ bash service.sh install      # 安装开机自启动（推荐）
 7. **全工作区索引**：工作区中所有文本文件都被索引（`.md` `.txt` `.html` `.json` `.mdc` 等）
 8. **增量索引**：仅对变化的文件重新嵌入（按内容 hash 追踪），相同文本永不重复调 API
 9. **定时任务**：AI 写入 `cron-jobs.json` 创建定时任务，到期自动执行并飞书通知
-10. **心跳系统**：定期触发 AI 执行 `HEARTBEAT.md` 清单，通过 `heartbeat-state.json` 追踪检查历史，AI 自主管理检查清单
+10. **心跳系统**：定期触发 AI 执行 `.cursor/HEARTBEAT.md` 清单，通过 `.cursor/memory/heartbeat-state.json` 追踪检查历史，AI 自主管理检查清单
 11. **安全守则**：反操纵、反权力寻求、人类监督优先的安全规则内置于工作区规范中
 
 ### 定制
@@ -425,9 +431,9 @@ bash service.sh install      # 安装开机自启动（推荐）
 
 心跳系统每 30 分钟自动触发 AI 执行检查和后台维护。AI 会：
 
-- 读取 `HEARTBEAT.md` 检查清单，逐项执行
+- 读取 `.cursor/HEARTBEAT.md` 检查清单，逐项执行
 - 做后台工作（整理记忆、检查项目状态、更新文档）
-- 自主管理 `HEARTBEAT.md`（清单过时时自动更新）
+- 自主管理 `.cursor/HEARTBEAT.md`（清单过时时自动更新）
 - 无事回复 `HEARTBEAT_OK`，有值得告知的事通过飞书通知
 
 | 指令 | 说明 |

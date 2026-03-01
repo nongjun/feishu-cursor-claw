@@ -145,10 +145,12 @@ function ensureWorkspace(wsPath: string): boolean {
 	const isNewWorkspace = !existsSync(resolve(wsPath, ".cursor/SOUL.md"));
 	let copied = 0;
 
-	// 首次初始化时复制 BOOTSTRAP.md（仅新工作区）
+	// AGENTS.md 放在根目录（Cursor 自动加载约定）
+	const rootFiles = ["AGENTS.md"];
+	// 首次初始化时额外复制 BOOTSTRAP.md（仅新工作区）
 	const allFiles = isNewWorkspace
-		? [...WORKSPACE_FILES, ".cursor/BOOTSTRAP.md", ...WORKSPACE_RULES]
-		: [...WORKSPACE_FILES, ...WORKSPACE_RULES];
+		? [...rootFiles, ...WORKSPACE_FILES, ".cursor/BOOTSTRAP.md", ...WORKSPACE_RULES]
+		: [...rootFiles, ...WORKSPACE_FILES, ...WORKSPACE_RULES];
 
 	for (const f of allFiles) {
 		const target = resolve(wsPath, f);

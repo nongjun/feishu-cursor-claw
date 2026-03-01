@@ -197,12 +197,22 @@ TEMPLATE_RULES=(
     .cursor/rules/tools.mdc
     .cursor/rules/memory-protocol.mdc
     .cursor/rules/scheduler-protocol.mdc
+    .cursor/rules/heartbeat-protocol.mdc
     .cursor/rules/cursor-capabilities.mdc
 )
 
 mkdir -p "$DEFAULT_WS/.cursor/memory" "$DEFAULT_WS/.cursor/sessions" "$DEFAULT_WS/.cursor/rules"
 
 COPIED=0
+
+# AGENTS.md 放在工作区根目录（Cursor 自动加载约定）
+if [[ ! -f "$DEFAULT_WS/AGENTS.md" ]]; then
+    cp "$TEMPLATE_DIR/AGENTS.md" "$DEFAULT_WS/AGENTS.md"
+    echo "  📄 已复制 AGENTS.md"
+    COPIED=$((COPIED + 1))
+else
+    echo "  ✅ AGENTS.md 已存在（保留用户定制版本）"
+fi
 for f in "${TEMPLATE_FILES[@]}"; do
     if [[ ! -f "$DEFAULT_WS/$f" ]]; then
         cp "$TEMPLATE_DIR/$f" "$DEFAULT_WS/$f"
