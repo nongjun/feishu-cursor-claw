@@ -1173,17 +1173,6 @@ function isDup(id: string): boolean {
 	seen.set(id, now);
 	return false;
 }
-let active = 0;
-const MAX = 2;
-const waitQueue: Array<() => void> = [];
-
-function releaseSlot() {
-	active--;
-	if (waitQueue.length > 0) {
-		waitQueue.shift()!();
-	}
-}
-
 // ── 消息处理 ─────────────────────────────────────
 async function handle(params: {
 	text: string;
@@ -1199,25 +1188,7 @@ async function handle(params: {
 	lastActiveChatId = chatId;
 	console.log(`[${new Date().toISOString()}] [${messageType}] ${text.slice(0, 80)}`);
 
-	// 全局并发控制
-	let cardId: string | undefined;
-	if (active >= MAX) {
-		const pos = waitQueue.length + 1;
-		console.log(`[排队] 第${pos}位 (当前 ${active} 个运行中)`);
-		cardId = await replyCard(messageId, `⏳ 排队中（第${pos}位，前面 ${active} 个任务）`, {
-			title: "排队中",
-			color: "grey",
-		});
-		await new Promise<void>((resolve) => waitQueue.push(resolve));
-	}
-
-	active++;
-
-	try {
-		return await handleInner(text, messageId, chatId, chatType, messageType, content, cardId);
-	} finally {
-		releaseSlot();
-	}
+	return handleInner(text, messageId, chatId, chatType, messageType, content);
 }
 
 async function handleInner(
@@ -1227,8 +1198,8 @@ async function handleInner(
 	chatType: string,
 	messageType: string,
 	content: string,
-	cardId?: string,
 ): Promise<void> {
+	let cardId: string | undefined;
 	const isGroup = chatType === "group";
 	// 处理媒体附件
 	const parsed = parseContent(messageType, content);
@@ -1376,7 +1347,7 @@ async function handleInner(
 			`**记忆：** ${memStatus}`,
 			`**调度：** ${(() => { const s = scheduler.getStats(); return s.total > 0 ? `${s.enabled}/${s.total} 任务${s.nextRunIn ? `（下次: ${s.nextRunIn}）` : ""}` : "无任务"; })()}`,
 			`**心跳：** ${heartbeat.getStatus().enabled ? `每 ${Math.round(heartbeat.getStatus().everyMs / 60000)} 分钟` : "未启用"}`,
-			`**并发：** ${active}/${MAX} 运行中，${waitQueue.length} 排队`,
+			`**活跃任务：** ${busySessions.size} 个运行中`,
 			"",
 			"**项目路由：**",
 			projects,
