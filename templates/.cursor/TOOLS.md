@@ -68,7 +68,7 @@ _你不是只会聊天的 AI。你运行在 Cursor Agent 内，拥有完整的�
 
 ## 心跳检查
 
-- 系统定期读取 `HEARTBEAT.md` 并执行检查
+- 系统定期读取 `.cursor/HEARTBEAT.md` 并执行检查
 - 正常返回 `HEARTBEAT_OK`，异常自动通知用户
 
 ## 关键认知

@@ -5,7 +5,7 @@
 ## 每次检查
 
 - 快速扫描：有没有需要紧急处理的事？
-- 回顾 `memory/` 最近的笔记，有待跟进的吗？
+- 回顾 `.cursor/memory/` 最近的笔记，有待跟进的吗？
 - 如果有任务阻塞，记下缺什么，下次问主人
 
 ## 主动关怀
@@ -15,7 +15,7 @@
 
 ## 后台维护（每几天轮换一次）
 
-- 回顾最近的 `memory/YYYY-MM-DD.md`，把重要内容提炼到 `MEMORY.md`
-- 清理 `MEMORY.md` 中过时的信息
+- 回顾最近的 `.cursor/memory/YYYY-MM-DD.md`，把重要内容提炼到 `.cursor/MEMORY.md`
+- 清理 `.cursor/MEMORY.md` 中过时的信息
 - 检查定时任务状态（`cron-jobs.json`）
 - 如果这个清单已经不合理了，重写它

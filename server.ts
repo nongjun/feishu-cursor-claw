@@ -120,7 +120,11 @@ watchFile(PROJECTS_PATH, { interval: 5000 }, () => {
 
 // ── 工作区模板自动初始化 ─────────────────────────
 const TEMPLATE_DIR = resolve(import.meta.dirname, "templates");
-const WORKSPACE_FILES = ["MEMORY.md", "HEARTBEAT.md", "TASKS.md", "BOOT.md"];
+const WORKSPACE_FILES = [
+	".cursor/SOUL.md", ".cursor/IDENTITY.md", ".cursor/USER.md",
+	".cursor/MEMORY.md", ".cursor/HEARTBEAT.md", ".cursor/TASKS.md",
+	".cursor/BOOT.md", ".cursor/TOOLS.md",
+];
 const WORKSPACE_RULES = [
 	".cursor/rules/soul.mdc",
 	".cursor/rules/agent-identity.mdc",
@@ -134,16 +138,16 @@ const WORKSPACE_RULES = [
 ];
 
 function ensureWorkspace(wsPath: string): boolean {
-	mkdirSync(resolve(wsPath, "memory"), { recursive: true });
-	mkdirSync(resolve(wsPath, "sessions"), { recursive: true });
+	mkdirSync(resolve(wsPath, ".cursor/memory"), { recursive: true });
+	mkdirSync(resolve(wsPath, ".cursor/sessions"), { recursive: true });
 	mkdirSync(resolve(wsPath, ".cursor/rules"), { recursive: true });
 
-	const isNewWorkspace = !existsSync(resolve(wsPath, "SOUL.md"));
+	const isNewWorkspace = !existsSync(resolve(wsPath, ".cursor/SOUL.md"));
 	let copied = 0;
 
 	// 首次初始化时复制 BOOTSTRAP.md（仅新工作区）
 	const allFiles = isNewWorkspace
-		? [...WORKSPACE_FILES, "BOOTSTRAP.md", ...WORKSPACE_RULES]
+		? [...WORKSPACE_FILES, ".cursor/BOOTSTRAP.md", ...WORKSPACE_RULES]
 		: [...WORKSPACE_FILES, ...WORKSPACE_RULES];
 
 	for (const f of allFiles) {
@@ -160,7 +164,7 @@ function ensureWorkspace(wsPath: string): boolean {
 	if (copied > 0) {
 		console.log(`[工作区] ${wsPath} 初始化完成 (${copied} 个文件)`);
 		if (isNewWorkspace) {
-			console.log("[工作区] 首次启动：BOOTSTRAP.md 已就绪，首次对话将触发出生仪式");
+			console.log("[工作区] 首次启动：.cursor/BOOTSTRAP.md 已就绪，首次对话将触发出生仪式");
 		}
 	}
 	return isNewWorkspace;
@@ -924,12 +928,58 @@ interface StreamEvent {
 	message?: { role: string; content: Array<{ type: string; text?: string }> };
 	tool_name?: string;
 	tool_call_id?: string;
+	call_id?: string;
+	tool_call?: Record<string, { args?: Record<string, unknown>; result?: Record<string, { content?: string }> }>;
 }
 
 function tryParseJson(line: string): StreamEvent | null {
 	const trimmed = line.trim();
 	if (!trimmed || !trimmed.startsWith("{")) return null;
 	try { return JSON.parse(trimmed); } catch { return null; }
+}
+
+const TOOL_LABELS: Record<string, string> = {
+	read: "📖 读取", write: "✏️ 写入", strReplace: "✏️ 编辑",
+	shell: "⚡ 执行", grep: "🔍 搜索", glob: "📂 查找",
+	semanticSearch: "🔎 语义搜索", webSearch: "🌐 搜索网页", webFetch: "🌐 抓取网页",
+	delete: "🗑️ 删除", editNotebook: "📓 编辑笔记本",
+	callMcpTool: "🔌 MCP工具", task: "🤖 子任务",
+};
+
+function describeToolCall(tc: Record<string, { args?: Record<string, unknown> }>): string {
+	for (const [key, val] of Object.entries(tc)) {
+		const name = key.replace(/ToolCall$/, "");
+		const label = TOOL_LABELS[name] || `🔧 ${name}`;
+		const a = val?.args;
+		if (!a) return label;
+		if (a.path) return `${label} ${basename(String(a.path))}`;
+		if (a.command) return `${label} ${String(a.command).slice(0, 80)}`;
+		if (a.pattern) return `${label} "${a.pattern}"${a.path ? ` in ${basename(String(a.path))}` : ""}`;
+		if (a.glob_pattern) return `${label} ${a.glob_pattern}`;
+		if (a.query) return `${label} ${String(a.query).slice(0, 60)}`;
+		if (a.search_term) return `${label} ${String(a.search_term).slice(0, 60)}`;
+		if (a.url) return `${label} ${String(a.url).slice(0, 60)}`;
+		if (a.description) return `${label} ${String(a.description).slice(0, 60)}`;
+		return label;
+	}
+	return "🔧 工具调用";
+}
+
+function describeToolResult(tc: Record<string, { args?: Record<string, unknown>; result?: Record<string, { content?: string }> }>): string {
+	for (const val of Object.values(tc)) {
+		const r = val?.result;
+		if (!r) return "";
+		const success = r.success as Record<string, unknown> | undefined;
+		if (success?.content) return String(success.content).slice(0, 200);
+		const err = r.error as Record<string, unknown> | undefined;
+		if (err?.message) return `❌ ${String(err.message).slice(0, 150)}`;
+	}
+	return "";
+}
+
+function basename(p: string): string {
+	const parts = p.split("/");
+	return parts[parts.length - 1] || p;
 }
 
 // 核心：spawn agent CLI，解析 stream-json，返回结果
@@ -975,6 +1025,8 @@ function execAgent(
 		let phase: AgentProgress["phase"] = "thinking";
 		let thinkingBuf = "";
 		let assistantBuf = "";
+		let lastSegment = "";
+		let toolBuf = ""; // 工具活动日志（显示在进度卡片中）
 		let done = false;
 		const startTime = Date.now();
 		let lastProgressTime = 0;
@@ -987,14 +1039,21 @@ function execAgent(
 			activeAgents.delete(lockKey);
 		}
 
+		function getSnippet(): string {
+			if (phase === "thinking") return thinkingBuf.slice(-200);
+			if (phase === "tool_call") {
+				const lines = toolBuf.split("\n").filter(l => l.trim());
+				return lines.slice(-6).join("\n") || assistantBuf.slice(-300);
+			}
+			return assistantBuf.slice(-300);
+		}
+
 		const timer = setInterval(() => {
 			if (done) return;
 			const now = Date.now();
 			if (opts?.onProgress && now - lastProgressTime >= PROGRESS_INTERVAL) {
 				lastProgressTime = now;
-				const snippet = phase === "thinking"
-					? thinkingBuf.slice(-200)
-					: assistantBuf.slice(-300);
+				const snippet = getSnippet();
 				if (snippet) {
 					opts.onProgress({
 						elapsed: Math.round((now - startTime) / 1000),
@@ -1018,15 +1077,32 @@ function execAgent(
 					if (ev.text) thinkingBuf += ev.text;
 					break;
 				case "assistant":
+					if (phase !== "responding") toolBuf = "";
 					phase = "responding";
 					if (ev.message?.content) {
 						for (const c of ev.message.content) {
-							if (c.type === "text" && c.text) assistantBuf += c.text;
+							if (c.type === "text" && c.text) {
+								assistantBuf += c.text;
+								lastSegment += c.text;
+							}
 						}
 					}
 					break;
 				case "tool_call":
 					phase = "tool_call";
+					lastSegment = "";
+					if (ev.tool_call) {
+						if (ev.subtype === "started") {
+							const desc = describeToolCall(ev.tool_call);
+							toolBuf += (toolBuf ? "\n" : "") + desc;
+						} else if (ev.subtype === "completed") {
+							const brief = describeToolResult(ev.tool_call);
+							if (brief) {
+								const oneLiner = brief.split("\n").filter(l => l.trim()).slice(0, 2).join(" | ");
+								toolBuf += `  → ${oneLiner.slice(0, 120)}`;
+							}
+						}
+					}
 					break;
 				case "result":
 					if (ev.result != null) resultText = ev.result;
@@ -1036,17 +1112,15 @@ function execAgent(
 					break;
 			}
 
-			// 阶段切换时立即触发一次进度更新（不等 interval）
-			if (phase !== prevPhase && opts?.onProgress) {
+			// 阶段切换 或 tool_call 新事件时立即触发进度更新
+			const isToolEvent = ev.type === "tool_call" && ev.tool_call;
+			if ((phase !== prevPhase || isToolEvent) && opts?.onProgress) {
 				const now = Date.now();
 				lastProgressTime = now;
-				const snippet = phase === "thinking"
-					? thinkingBuf.slice(-200)
-					: assistantBuf.slice(-300);
 				opts.onProgress({
 					elapsed: Math.round((now - startTime) / 1000),
 					phase,
-					snippet: snippet || "...",
+					snippet: getSnippet() || "...",
 				});
 			}
 		}
@@ -1068,7 +1142,9 @@ function execAgent(
 			// 处理 lineBuf 中残留的最后一行
 			if (lineBuf.trim()) processLine(lineBuf);
 
-			const output = resultText || strip(assistantBuf) || strip(stderr) || "(无输出)";
+			// 优先取最后一段 assistant 回复（最终结果），避免输出中间过程
+			const finalSegment = strip(lastSegment);
+			const output = finalSegment || resultText || strip(assistantBuf) || strip(stderr) || "(无输出)";
 
 			if (code !== 0 && code !== null && !resultText) {
 				reject(new Error(strip(stderr) || output));
@@ -1614,7 +1690,7 @@ async function handleInner(
 				"- `/心跳 执行` — 立即执行一次",
 				"- `/心跳 间隔 分钟数` — 设置间隔",
 				"",
-				"编辑工作区的 `HEARTBEAT.md` 可自定义检查清单。",
+				"编辑工作区的 `.cursor/HEARTBEAT.md` 可自定义检查清单。",
 			].filter(Boolean).join("\n");
 			await replyCard(messageId, statusText, { title: "💓 心跳系统", color: "purple" });
 			return;
@@ -1622,7 +1698,7 @@ async function handleInner(
 
 		if (/^(开启|enable|on|start|启动)$/i.test(subCmd)) {
 			heartbeat.updateConfig({ enabled: true });
-			await replyCard(messageId, `心跳已开启，每 ${Math.round(heartbeat.getStatus().everyMs / 60000)} 分钟检查一次。\n\n编辑 \`HEARTBEAT.md\` 自定义检查清单。`, { title: "💓 已开启", color: "green" });
+			await replyCard(messageId, `心跳已开启，每 ${Math.round(heartbeat.getStatus().everyMs / 60000)} 分钟检查一次。\n\n编辑 \`.cursor/HEARTBEAT.md\` 自定义检查清单。`, { title: "💓 已开启", color: "green" });
 			return;
 		}
 
@@ -1937,7 +2013,7 @@ console.log(`
 │  记忆: ${memEngine}
 │  调度: cron-jobs.json (文件监听)
 │  心跳: 默认关闭（飞书 /心跳 开启）
-│  自检: BOOT.md（每次启动执行）
+│  自检: .cursor/BOOT.md（每次启动执行）
 │
 │  规则（每次会话自动加载）:
 │    soul.mdc, agent-identity.mdc, user-context.mdc
@@ -1964,16 +2040,16 @@ heartbeat.start();
 ws.start({ eventDispatcher: dispatcher });
 console.log("飞书长连接已启动，等待消息...");
 
-// ── 启动自检（BOOT.md）─────────────────────────────
+// ── 启动自检（.cursor/BOOT.md）───────────────────────
 setTimeout(async () => {
-	const bootPath = resolve(defaultWorkspace, "BOOT.md");
+	const bootPath = resolve(defaultWorkspace, ".cursor/BOOT.md");
 	try {
 		if (!existsSync(bootPath)) return;
 		const content = readFileSync(bootPath, "utf-8").trim();
 		if (!content) return;
-		console.log("[启动] 检测到 BOOT.md，执行启动自检...");
+		console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
 		const bootPrompt = [
-			"你正在执行启动自检。严格按 BOOT.md 指示操作。",
+			"你正在执行启动自检。严格按 .cursor/BOOT.md 指示操作。",
 			"如果无事可做，不需要回复任何内容。",
 		].join("\n");
 		const { result } = await runAgent(defaultWorkspace, bootPrompt);
@@ -1981,8 +2057,8 @@ setTimeout(async () => {
 		if (trimmed && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveChatId) {
 			await sendCard(lastActiveChatId, trimmed, { title: "🚀 启动自检", color: "wathet" });
 		}
-		console.log("[启动] BOOT.md 自检完成");
+		console.log("[启动] .cursor/BOOT.md 自检完成");
 	} catch (e) {
-		console.warn(`[启动] BOOT.md 执行失败: ${e}`);
+		console.warn(`[启动] .cursor/BOOT.md 执行失败: ${e}`);
 	}
 }, 8000);

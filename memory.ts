@@ -102,8 +102,8 @@ export class MemoryManager {
 
 	constructor(config: MemoryConfig) {
 		this.config = config;
-		this.memoryDir = resolve(config.workspaceDir, "memory");
-		this.sessionsDir = resolve(config.workspaceDir, "sessions");
+		this.memoryDir = resolve(config.workspaceDir, ".cursor/memory");
+		this.sessionsDir = resolve(config.workspaceDir, ".cursor/sessions");
 		mkdirSync(this.memoryDir, { recursive: true });
 		mkdirSync(this.sessionsDir, { recursive: true });
 
@@ -580,7 +580,7 @@ export class MemoryManager {
 			}
 		}
 
-		const memPath = resolve(this.config.workspaceDir, "MEMORY.md");
+		const memPath = resolve(this.config.workspaceDir, ".cursor/MEMORY.md");
 		if (existsSync(memPath)) {
 			const content = readFileSync(memPath, "utf-8");
 			if (content.trim().length > 50) {

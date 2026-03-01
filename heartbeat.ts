@@ -19,9 +19,9 @@ interface HeartbeatState {
   consecutiveSkips: number;
 }
 
-const DEFAULT_PROMPT = `[心跳检查] 读取 HEARTBEAT.md（如果存在），严格按清单执行检查。
-不要凭空推断或重复旧任务。检查 memory/ 获取近期上下文，需要时做后台维护。
-如果清单已过时，主动更新 HEARTBEAT.md。如果无需关注，只回复 HEARTBEAT_OK。`;
+const DEFAULT_PROMPT = `[心跳检查] 读取 .cursor/HEARTBEAT.md（如果存在），严格按清单执行检查。
+不要凭空推断或重复旧任务。检查 .cursor/memory/ 获取近期上下文，需要时做后台维护。
+如果清单已过时，主动更新 .cursor/HEARTBEAT.md。如果无需关注，只回复 HEARTBEAT_OK。`;
 
 const HEARTBEAT_OK_RE = /heartbeat_ok/im;
 

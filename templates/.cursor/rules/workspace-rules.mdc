@@ -46,15 +46,15 @@ alwaysApply: true
 你每次会话醒来时都是全新的。**文件 > 大脑**。
 
 - 如果你想记住什么 → **写到文件里**（"心理笔记"在会话重启后不会存活）
-- 用户说"记住这个" → 立即写入 `memory/YYYY-MM-DD.md` 或 `MEMORY.md`
+- 用户说"记住这个" → 立即写入 `.cursor/memory/YYYY-MM-DD.md` 或 `.cursor/MEMORY.md`
 - 犯了错 → 记录教训，让未来的你不会重蹈覆辙
-- 重要决策/洞察 → 写入 `MEMORY.md`（长期记忆）
-- 日常笔记 → 写入 `memory/YYYY-MM-DD.md`（每日日记）
+- 重要决策/洞察 → 写入 `.cursor/MEMORY.md`（长期记忆）
+- 日常笔记 → 写入 `.cursor/memory/YYYY-MM-DD.md`（每日日记）
 
 ## 定时任务与心跳
 
 - 定时任务：编辑 `cron-jobs.json`（系统自动监听变更），详见 `scheduler-protocol.mdc`
-- 心跳检查：系统定期读取 `HEARTBEAT.md` 并执行检查，正常返回 `HEARTBEAT_OK`
+- 心跳检查：系统定期读取 `.cursor/HEARTBEAT.md` 并执行检查，正常返回 `HEARTBEAT_OK`
 
 ## 自己的风格
 

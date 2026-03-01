@@ -38,7 +38,7 @@ bun ~/Documents/Ai管理的文件夹/relay-bot/memory-tool.ts index
 - 待办事项、开放性问题
 
 **搜索流程：**
-1. 用 `search` 命令搜索 `MEMORY.md` + `memory/*.md`
+1. 用 `search` 命令搜索 `.cursor/MEMORY.md` + `.cursor/memory/*.md`
 2. 根据搜索结果回答问题
 3. 如果搜索后仍然没有信心，告诉用户"我查过记忆了但没找到"
 4. 引用来源时附上 `来源: <文件名>` 帮助用户验证
@@ -47,16 +47,16 @@ bun ~/Documents/Ai管理的文件夹/relay-bot/memory-tool.ts index
 
 ## 记忆文件布局
 
-- `MEMORY.md` — 长期记忆（精华、偏好、重要决策）
-- `memory/YYYY-MM-DD.md` — 每日日记（原始记录）
-- `sessions/` — 会话转录日志（只读参考）
+- `.cursor/MEMORY.md` — 长期记忆（精华、偏好、重要决策）
+- `.cursor/memory/YYYY-MM-DD.md` — 每日日记（原始记录）
+- `.cursor/sessions/` — 会话转录日志（只读参考）
 - 工作区其他所有文本文件也已被索引，`search` 可以搜到
 
 ## 记忆写入
 
 除了用 `write` 命令写入日记，你也可以直接编辑文件：
-- 决策、偏好、持久事实 → 写入 `MEMORY.md`
-- 日常笔记 → 写入 `memory/YYYY-MM-DD.md`（今天的日期）
+- 决策、偏好、持久事实 → 写入 `.cursor/MEMORY.md`
+- 日常笔记 → 写入 `.cursor/memory/YYYY-MM-DD.md`（今天的日期）
 - 用户说"记住这个" → 立即写入文件
 - 犯错后 → 记录教训，防止重蹈覆辙
 
@@ -81,7 +81,7 @@ bun ~/Documents/Ai管理的文件夹/relay-bot/memory-tool.ts index
 
 **主动保存规则：**
 - 当对话超过 15 轮时，检查是否有重要信息还没写入文件
-- 当你感觉对话很长、做了很多事时，主动把关键决策和成果写入 `memory/YYYY-MM-DD.md`
+- 当你感觉对话很长、做了很多事时，主动把关键决策和成果写入 `.cursor/memory/YYYY-MM-DD.md`
 - 写入时使用 APPEND 模式（追加），不要覆盖已有内容
 - 每次保存时记录当前时间戳
 
@@ -97,9 +97,9 @@ bun ~/Documents/Ai管理的文件夹/relay-bot/memory-tool.ts index
 ## 记忆维护
 
 定期（每隔几天）：
-1. 回顾最近的 `memory/YYYY-MM-DD.md`
-2. 提炼重要事件、教训、洞察到 `MEMORY.md`
-3. 从 `MEMORY.md` 移除过时信息
+1. 回顾最近的 `.cursor/memory/YYYY-MM-DD.md`
+2. 提炼重要事件、教训、洞察到 `.cursor/MEMORY.md`
+3. 从 `.cursor/MEMORY.md` 移除过时信息
 
 ## 安全
 

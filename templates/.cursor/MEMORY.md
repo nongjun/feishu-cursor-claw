@@ -1,7 +1,7 @@
 # MEMORY.md - 长期记忆
 
 _这是你的长期记忆。记录重要的决策、偏好、持久的事实。_
-_每日笔记在 `memory/YYYY-MM-DD.md`。这里是提炼后的精华。_
+_每日笔记在 `.cursor/memory/YYYY-MM-DD.md`。这里是提炼后的精华。_
 
 ---
 

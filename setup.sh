@@ -184,7 +184,11 @@ fi
 DEFAULT_WS="${DEFAULT_WS:-$WORK_DIR}"
 
 TEMPLATE_DIR="$BOT_DIR/templates"
-TEMPLATE_FILES=(MEMORY.md HEARTBEAT.md TASKS.md)
+TEMPLATE_FILES=(
+    .cursor/SOUL.md .cursor/IDENTITY.md .cursor/USER.md
+    .cursor/MEMORY.md .cursor/HEARTBEAT.md .cursor/TASKS.md
+    .cursor/BOOT.md .cursor/TOOLS.md
+)
 TEMPLATE_RULES=(
     .cursor/rules/soul.mdc
     .cursor/rules/agent-identity.mdc
@@ -196,7 +200,7 @@ TEMPLATE_RULES=(
     .cursor/rules/cursor-capabilities.mdc
 )
 
-mkdir -p "$DEFAULT_WS/memory" "$DEFAULT_WS/sessions" "$DEFAULT_WS/.cursor/rules"
+mkdir -p "$DEFAULT_WS/.cursor/memory" "$DEFAULT_WS/.cursor/sessions" "$DEFAULT_WS/.cursor/rules"
 
 COPIED=0
 for f in "${TEMPLATE_FILES[@]}"; do
@@ -270,5 +274,5 @@ echo "  更换 Key/模型: 直接编辑 .env（热更换）"
 echo ""
 echo "  工作区文件位置: $DEFAULT_WS"
 echo "    编辑 .cursor/rules/ 下的 .mdc 文件完成个性化"
-echo "    MEMORY.md 和 memory/ 会随使用自动积累"
+echo "    .cursor/MEMORY.md 和 .cursor/memory/ 会随使用自动积累"
 echo "============================================="

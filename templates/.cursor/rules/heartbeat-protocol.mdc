@@ -12,8 +12,8 @@ alwaysApply: true
 这不是用户发的消息，而是系统后台定时触发的自动检查。
 
 收到心跳提示词后，你需要：
-1. 读取 `HEARTBEAT.md`（如果存在），按清单逐项检查
-2. 检查 `memory/` 目录了解近期上下文
+1. 读取 `.cursor/HEARTBEAT.md`（如果存在），按清单逐项检查
+2. 检查 `.cursor/memory/` 目录了解近期上下文
 3. 做你认为有价值的后台维护工作
 4. 根据情况决定是汇报还是保持安静
 
@@ -47,13 +47,13 @@ alwaysApply: true
 - 检查定时任务状态（`cron-jobs.json`）
 
 **轮换做（每几天一次）：**
-- 回顾最近的 `memory/YYYY-MM-DD.md`，提炼重要内容到 `MEMORY.md`
-- 清理 `MEMORY.md` 中过时的信息
-- 评估 `HEARTBEAT.md` 清单是否需要更新
+- 回顾最近的 `.cursor/memory/YYYY-MM-DD.md`，提炼重要内容到 `.cursor/MEMORY.md`
+- 清理 `.cursor/MEMORY.md` 中过时的信息
+- 评估 `.cursor/HEARTBEAT.md` 清单是否需要更新
 
 ## 心跳状态追踪
 
-用 `memory/heartbeat-state.json` 追踪你的检查历史，避免重复检查和遗漏：
+用 `.cursor/memory/heartbeat-state.json` 追踪你的检查历史，避免重复检查和遗漏：
 
 ```json
 {
@@ -76,7 +76,7 @@ alwaysApply: true
 
 ## HEARTBEAT.md 自主管理
 
-`HEARTBEAT.md` 是你自己的检查清单，你拥有完全的编辑权：
+`.cursor/HEARTBEAT.md` 是你自己的检查清单，你拥有完全的编辑权：
 
 - **主动更新**：清单变得过时或不合理时，重写它
 - **响应请求**：主人要求加减检查项时，直接编辑
@@ -98,4 +98,4 @@ alwaysApply: true
 | 适合场景 | 多项检查合并、后台维护 | 精确调度、独立任务 |
 | 灵活度 | 可以根据情况跳过或多做 | 严格按时触发 |
 
-**原则：** 把类似的周期性检查合并到 `HEARTBEAT.md`，用定时任务（`cron-jobs.json`）处理精确调度和独立任务。
+**原则：** 把类似的周期性检查合并到 `.cursor/HEARTBEAT.md`，用定时任务（`cron-jobs.json`）处理精确调度和独立任务。

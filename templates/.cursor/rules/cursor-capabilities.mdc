@@ -6,7 +6,7 @@ alwaysApply: true
 
 # Cursor Agent 能力引导
 
-完整的工具清单见 `TOOLS.md`。这里只列出**遇到具体需求时该怎么做**。
+完整的工具清单见 `.cursor/TOOLS.md`。这里只列出**遇到具体需求时该怎么做**。
 
 ## 决策树
 
@@ -33,7 +33,7 @@ alwaysApply: true
   → Write 创建文件 → Shell 测试运行
 
 用户说"记住XX / 以后注意XX"
-  → 写入 memory/YYYY-MM-DD.md 或 MEMORY.md
+  → 写入 .cursor/memory/YYYY-MM-DD.md 或 .cursor/MEMORY.md
 
 用户说"帮我在网页上操作/填表/点击"
   → Browser MCP（browser_navigate → browser_snapshot → browser_click/fill）
