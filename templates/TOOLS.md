@@ -79,4 +79,38 @@ _你不是只会聊天的 AI。你运行在 Cursor Agent 内，拥有完整的�
 
 ---
 
-_在下面添加你自己的工具备忘（SSH 地址、设备名、API 端点、常用命令等）。_
+## 远程服务器管理
+
+你可以通过 SSH 管理远程服务器。本地已配置免密登录。
+
+### 可用服务器
+
+| 名称 | 地址 | 用途 | 系统 |
+|------|------|------|------|
+| OS服务器 | `ssh root@120.79.242.43` | 主服务器 | Alibaba Cloud Linux 3 |
+
+### 常用运维命令
+
+```bash
+# 检查服务器状态
+ssh root@120.79.242.43 "uptime && free -h && df -h /"
+
+# 查看运行的容器
+ssh root@120.79.242.43 "docker ps"
+
+# 查看系统日志
+ssh root@120.79.242.43 "journalctl -n 100 --no-pager"
+
+# 重启服务（示例）
+ssh root@120.79.242.43 "systemctl restart docker"
+```
+
+### 注意事项
+
+- 执行危险操作前先确认（rm -rf、systemctl stop 等）
+- 长时间命令加 `nohup` 或 `screen/tmux`
+- 交互式命令（vim、top）不支持，用非交互替代（cat、ps）
+
+---
+
+_在下面添加更多服务器或工具备忘。_

@@ -16,8 +16,9 @@ import {
 	mkdirSync,
 	readdirSync,
 	appendFileSync,
+	statSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, relative, extname } from "node:path";
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -96,6 +97,7 @@ export class MemoryManager {
 	private memoryDir: string;
 	private sessionsDir: string;
 	private indexedAt = 0;
+	private indexing = false;
 	private hasFts5 = false;
 
 	constructor(config: MemoryConfig) {
@@ -177,27 +179,42 @@ export class MemoryManager {
 		const cached = this.getCachedEmbedding(hash);
 		if (cached) return cached;
 
-		const res = await fetch(this.config.embeddingEndpoint, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${this.config.embeddingApiKey}`,
-			},
-			body: JSON.stringify({
-				model: this.config.embeddingModel,
-				input: [{ type: "text", text: text.slice(0, 1024) }],
-			}),
-		});
+		const maxRetries = 2;
+		let lastErr: Error | undefined;
+		for (let attempt = 0; attempt <= maxRetries; attempt++) {
+			if (attempt > 0) {
+				await new Promise((r) => setTimeout(r, 1000 * attempt));
+			}
+			try {
+				const res = await fetch(this.config.embeddingEndpoint, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${this.config.embeddingApiKey}`,
+					},
+					body: JSON.stringify({
+						model: this.config.embeddingModel,
+						input: [{ type: "text", text: text.slice(0, 1024) }],
+					}),
+				});
 
-		if (!res.ok) {
-			const body = await res.text().catch(() => "");
-			throw new Error(`Embedding API ${res.status}: ${body.slice(0, 200)}`);
+				if (!res.ok) {
+					const body = await res.text().catch(() => "");
+					throw new Error(`Embedding API ${res.status}: ${body.slice(0, 200)}`);
+				}
+
+				const json = (await res.json()) as { data: { embedding: number[] }[] };
+				const embedding = json.data[0].embedding;
+				this.cacheEmbedding(hash, embedding);
+				return embedding;
+			} catch (err) {
+				lastErr = err instanceof Error ? err : new Error(String(err));
+				if (attempt < maxRetries) {
+					console.warn(`[记忆] 嵌入请求失败（第 ${attempt + 1} 次），${1 * (attempt + 1)}s 后重试: ${lastErr.message}`);
+				}
+			}
 		}
-
-		const json = (await res.json()) as { data: { embedding: number[] } };
-		const embedding = json.data.embedding;
-		this.cacheEmbedding(hash, embedding);
-		return embedding;
+		throw lastErr!;
 	}
 
 	// ── 文本分块 ──────────────────────────────────
@@ -260,24 +277,62 @@ export class MemoryManager {
 		return chunks;
 	}
 
-	// ── 索引（增量）──────────────────────────────
+	// ── 全工作区扫描 ─────────────────────────────
+
+	private static readonly INDEXABLE_EXTS = new Set([".md", ".txt", ".html", ".mdc", ".json", ".csv", ".tsv", ".xml", ".yaml", ".yml", ".toml"]);
+	private static readonly SKIP_DIRS = new Set([".git", ".cursor", "node_modules", "sessions", "inbox", "relay-bot", "vector-index", "dist", "build", "__pycache__"]);
+	private static readonly SKIP_FILES = new Set(["package-lock.json", "pnpm-lock.yaml", ".DS_Store", ".sessions.json", ".memory.sqlite", ".memory.sqlite-shm", ".memory.sqlite-wal"]);
+	private static readonly MAX_FILE_BYTES = 100 * 1024; // 100KB — 跳过超大文件，避免浪费嵌入额度
 
 	private scanFiles(): Map<string, { content: string; hash: string; size: number }> {
 		const result = new Map<string, { content: string; hash: string; size: number }>();
+		const root = this.config.workspaceDir;
 
-		const memoryMd = resolve(this.config.workspaceDir, "MEMORY.md");
-		if (existsSync(memoryMd)) {
-			const content = readFileSync(memoryMd, "utf-8");
-			result.set("MEMORY.md", { content, hash: textHash(content), size: content.length });
-		}
-
-		if (existsSync(this.memoryDir)) {
-			for (const f of readdirSync(this.memoryDir).filter((f) => f.endsWith(".md"))) {
-				const content = readFileSync(resolve(this.memoryDir, f), "utf-8");
-				result.set(`memory/${f}`, { content, hash: textHash(content), size: content.length });
+		const walk = (dir: string): void => {
+			let entries: string[];
+			try {
+				entries = readdirSync(dir);
+			} catch {
+				return;
 			}
-		}
 
+			for (const name of entries) {
+				if (name.startsWith(".")) continue;
+
+				const fullPath = resolve(dir, name);
+				let stat;
+				try {
+					stat = statSync(fullPath);
+				} catch {
+					continue;
+				}
+
+				if (stat.isDirectory()) {
+					if (MemoryManager.SKIP_DIRS.has(name)) continue;
+					walk(fullPath);
+					continue;
+				}
+
+				if (!stat.isFile()) continue;
+				if (MemoryManager.SKIP_FILES.has(name)) continue;
+				if (stat.size > MemoryManager.MAX_FILE_BYTES) continue;
+				if (stat.size === 0) continue;
+
+				const ext = extname(name).toLowerCase();
+				if (!MemoryManager.INDEXABLE_EXTS.has(ext)) continue;
+
+				const relPath = relative(root, fullPath);
+				try {
+					const content = readFileSync(fullPath, "utf-8");
+					if (content.trim().length < 20) continue;
+					result.set(relPath, { content, hash: textHash(content), size: stat.size });
+				} catch {
+					// 非 UTF-8 或读取失败，跳过
+				}
+			}
+		};
+
+		walk(root);
 		return result;
 	}
 
@@ -301,6 +356,19 @@ export class MemoryManager {
 	}
 
 	async index(): Promise<number> {
+		if (this.indexing) {
+			console.log("[记忆] 索引已在进行中，跳过重复调用");
+			return (this.db.prepare("SELECT COUNT(*) as c FROM chunks").get() as { c: number }).c;
+		}
+		this.indexing = true;
+		try {
+			return await this._indexInner();
+		} finally {
+			this.indexing = false;
+		}
+	}
+
+	private async _indexInner(): Promise<number> {
 		const diskFiles = this.scanFiles();
 		if (diskFiles.size === 0) return 0;
 
@@ -551,11 +619,12 @@ export class MemoryManager {
 
 	// ── 统计 ──────────────────────────────────────
 
-	getStats(): { chunks: number; files: number; cachedEmbeddings: number } {
+	getStats(): { chunks: number; files: number; cachedEmbeddings: number; filePaths: string[] } {
 		const chunks = (this.db.prepare("SELECT COUNT(*) as c FROM chunks").get() as { c: number }).c;
 		const files = (this.db.prepare("SELECT COUNT(*) as c FROM files").get() as { c: number }).c;
 		const cachedEmbeddings = (this.db.prepare("SELECT COUNT(*) as c FROM embedding_cache").get() as { c: number }).c;
-		return { chunks, files, cachedEmbeddings };
+		const filePaths = (this.db.prepare("SELECT path FROM files ORDER BY path").all() as { path: string }[]).map((r) => r.path);
+		return { chunks, files, cachedEmbeddings, filePaths };
 	}
 
 	// ── 生命周期 ──────────────────────────────────

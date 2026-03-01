@@ -1,34 +1,58 @@
 ---
-description: 记忆系统协议 - 读写记忆文件的规范
+description: 记忆系统 - 通过 memory-tool 搜索和写入记忆
 globs:
 alwaysApply: true
 ---
 
-# 记忆系统协议
+# 记忆系统
+
+你拥有一个向量记忆系统，覆盖工作区全部文本文件。通过 shell 调用 `memory-tool.ts` 使用。
+
+## 记忆工具
+
+```bash
+# 语义搜索（向量+关键词混合，返回最相关的片段）
+bun ~/Documents/Ai管理的文件夹/relay-bot/memory-tool.ts search "关键词或问题"
+
+# 查看最近记忆摘要
+bun ~/Documents/Ai管理的文件夹/relay-bot/memory-tool.ts recent --days 3
+
+# 写入今日日记
+bun ~/Documents/Ai管理的文件夹/relay-bot/memory-tool.ts write "要记录的内容"
+
+# 查看索引统计（已索引哪些文件）
+bun ~/Documents/Ai管理的文件夹/relay-bot/memory-tool.ts stats
+
+# 重建全工作区索引
+bun ~/Documents/Ai管理的文件夹/relay-bot/memory-tool.ts index
+```
+
+## 何时搜索记忆
+
+遇到以下情况时，**主动**用 `search` 命令搜索：
+- 用户提到过去的事件、决策、对话
+- 用户问"上次…"、"之前…"、"我说过…"
+- 需要用户的偏好、习惯、项目背景
+- 不确定某个事实或决策的上下文
+
+不需要每次对话都搜索。简单的指令（如"帮我写个脚本"）无需搜索记忆。
 
 ## 记忆文件布局
 
 - `MEMORY.md` — 长期记忆（精华、偏好、重要决策）
 - `memory/YYYY-MM-DD.md` — 每日日记（原始记录）
 - `sessions/` — 会话转录日志（只读参考）
-
-## 记忆召回
-
-回答任何关于过去工作、决策、日期、人物、偏好或待办事项的问题前：
-1. 先阅读 `MEMORY.md` 获取长期记忆
-2. 阅读 `memory/` 目录下最近 2 天的日记文件
-3. 如果搜索后仍低置信度，说明你已经检查过
+- 工作区其他所有文本文件也已被索引，`search` 可以搜到
 
 ## 记忆写入
 
+除了用 `write` 命令写入日记，你也可以直接编辑文件：
 - 决策、偏好、持久事实 → 写入 `MEMORY.md`
-- 日常笔记和运行上下文 → 写入 `memory/YYYY-MM-DD.md`（今天的日期）
-- 如果有人说"记住这个" → 立即写入文件（不要只记在"脑子"里）
-- 犯错后 → 记录教训到相关文件，防止重蹈覆辙
+- 日常笔记 → 写入 `memory/YYYY-MM-DD.md`（今天的日期）
+- 用户说"记住这个" → 立即写入文件
+- 犯错后 → 记录教训，防止重蹈覆辙
 
-## 写入格式
-
-每条记忆条目带时间戳：
+每条记忆带时间戳：
 
 ```markdown
 ### HH:MM 标题
@@ -39,15 +63,11 @@ alwaysApply: true
 ## 记忆维护
 
 定期（每隔几天）：
-1. 回顾最近的 `memory/YYYY-MM-DD.md` 文件
-2. 识别值得长期保留的重要事件、教训或洞察
-3. 用提炼的精华更新 `MEMORY.md`
-4. 从 MEMORY.md 中移除不再相关的过时信息
-
-像人类整理日记一样思考：每日文件是原始笔记；MEMORY.md 是筛选后的智慧。
+1. 回顾最近的 `memory/YYYY-MM-DD.md`
+2. 提炼重要事件、教训、洞察到 `MEMORY.md`
+3. 从 `MEMORY.md` 移除过时信息
 
 ## 安全
 
-- `MEMORY.md` 仅在主会话（与主人的私聊）中加载
 - 不要在群聊或有其他人的会话中暴露记忆内容
-- 这是为了安全 — 包含不应泄露的个人上下文
+- 记忆包含个人上下文，仅在私聊中使用

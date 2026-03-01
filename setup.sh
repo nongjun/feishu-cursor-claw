@@ -184,8 +184,17 @@ fi
 DEFAULT_WS="${DEFAULT_WS:-$WORK_DIR}"
 
 TEMPLATE_DIR="$BOT_DIR/templates"
-TEMPLATE_FILES=(SOUL.md IDENTITY.md AGENTS.md USER.md TOOLS.md MEMORY.md HEARTBEAT.md TASKS.md)
-TEMPLATE_RULES=(.cursor/rules/agent-identity.mdc .cursor/rules/memory-protocol.mdc .cursor/rules/scheduler-protocol.mdc .cursor/rules/cursor-capabilities.mdc)
+TEMPLATE_FILES=(MEMORY.md HEARTBEAT.md TASKS.md)
+TEMPLATE_RULES=(
+    .cursor/rules/soul.mdc
+    .cursor/rules/agent-identity.mdc
+    .cursor/rules/user-context.mdc
+    .cursor/rules/workspace-rules.mdc
+    .cursor/rules/tools.mdc
+    .cursor/rules/memory-protocol.mdc
+    .cursor/rules/scheduler-protocol.mdc
+    .cursor/rules/cursor-capabilities.mdc
+)
 
 mkdir -p "$DEFAULT_WS/memory" "$DEFAULT_WS/sessions" "$DEFAULT_WS/.cursor/rules"
 
@@ -212,9 +221,10 @@ done
 
 if [[ $COPIED -gt 0 ]]; then
     echo ""
-    echo "  💡 建议编辑以下文件完成个性化："
-    echo "     $DEFAULT_WS/IDENTITY.md  — 给你的 AI 起个名字"
-    echo "     $DEFAULT_WS/USER.md      — 填入你的个人信息"
+    echo "  💡 建议编辑以下规则文件完成个性化："
+    echo "     $DEFAULT_WS/.cursor/rules/agent-identity.mdc  — 给你的 AI 起个名字"
+    echo "     $DEFAULT_WS/.cursor/rules/user-context.mdc    — 填入你的个人信息"
+    echo "     $DEFAULT_WS/.cursor/rules/soul.mdc            — 调整 AI 的人格和风格"
 fi
 
 # ── 完成 ─────────────────────────────────────────
@@ -233,6 +243,6 @@ echo ""
 echo "  更换 Key/模型: 直接编辑 .env（热更换）"
 echo ""
 echo "  工作区文件位置: $DEFAULT_WS"
-echo "    编辑 IDENTITY.md 和 USER.md 完成个性化"
+echo "    编辑 .cursor/rules/ 下的 .mdc 文件完成个性化"
 echo "    MEMORY.md 和 memory/ 会随使用自动积累"
 echo "============================================="
