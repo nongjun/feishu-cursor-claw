@@ -201,7 +201,7 @@ TEMPLATE_RULES=(
     .cursor/rules/cursor-capabilities.mdc
 )
 
-mkdir -p "$DEFAULT_WS/.cursor/memory" "$DEFAULT_WS/.cursor/sessions" "$DEFAULT_WS/.cursor/rules"
+mkdir -p "$DEFAULT_WS/.cursor/memory" "$DEFAULT_WS/.cursor/sessions" "$DEFAULT_WS/.cursor/rules" "$DEFAULT_WS/.cursor/skills"
 
 COPIED=0
 
@@ -232,6 +232,22 @@ for f in "${TEMPLATE_RULES[@]}"; do
         echo "  ✅ $f 已存在"
     fi
 done
+
+# Skills（Cursor 官方 skill 规范：.cursor/skills/skill-name/SKILL.md）
+if [[ -d "$TEMPLATE_DIR/.cursor/skills" ]]; then
+    for skill_dir in "$TEMPLATE_DIR/.cursor/skills"/*/; do
+        skill_name=$(basename "$skill_dir")
+        target_dir="$DEFAULT_WS/.cursor/skills/$skill_name"
+        if [[ ! -f "$target_dir/SKILL.md" ]]; then
+            mkdir -p "$target_dir"
+            cp -r "$skill_dir"* "$target_dir/"
+            echo "  📄 已复制 skill: $skill_name"
+            COPIED=$((COPIED + 1))
+        else
+            echo "  ✅ skill $skill_name 已存在"
+        fi
+    done
+fi
 
 if [[ $COPIED -gt 0 ]]; then
     echo ""
