@@ -51,6 +51,29 @@ alwaysApply: true
 - 清理 `MEMORY.md` 中过时的信息
 - 评估 `HEARTBEAT.md` 清单是否需要更新
 
+## 心跳状态追踪
+
+用 `memory/heartbeat-state.json` 追踪你的检查历史，避免重复检查和遗漏：
+
+```json
+{
+  "lastChecks": {
+    "memory_review": "2026-02-28T10:00:00Z",
+    "project_status": "2026-02-28T10:00:00Z",
+    "cron_status": "2026-02-28T10:00:00Z",
+    "memory_maintenance": "2026-02-25T14:00:00Z"
+  },
+  "lastHeartbeat": "2026-02-28T10:00:00Z",
+  "heartbeatCount": 42
+}
+```
+
+**使用规则：**
+- 每次心跳时先读取此文件，了解上次各项检查的时间
+- 心跳结束时更新此文件，记录本次做了哪些检查
+- 基于时间间隔决定"轮换做"的任务（如 memory_maintenance 超过 3 天则执行）
+- 文件不存在时自动创建
+
 ## HEARTBEAT.md 自主管理
 
 `HEARTBEAT.md` 是你自己的检查清单，你拥有完全的编辑权：

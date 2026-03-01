@@ -120,7 +120,7 @@ watchFile(PROJECTS_PATH, { interval: 5000 }, () => {
 
 // ── 工作区模板自动初始化 ─────────────────────────
 const TEMPLATE_DIR = resolve(import.meta.dirname, "templates");
-const WORKSPACE_FILES = ["MEMORY.md", "HEARTBEAT.md", "TASKS.md"];
+const WORKSPACE_FILES = ["MEMORY.md", "HEARTBEAT.md", "TASKS.md", "BOOT.md"];
 const WORKSPACE_RULES = [
 	".cursor/rules/soul.mdc",
 	".cursor/rules/agent-identity.mdc",
@@ -133,13 +133,20 @@ const WORKSPACE_RULES = [
 	".cursor/rules/cursor-capabilities.mdc",
 ];
 
-function ensureWorkspace(wsPath: string): void {
+function ensureWorkspace(wsPath: string): boolean {
 	mkdirSync(resolve(wsPath, "memory"), { recursive: true });
 	mkdirSync(resolve(wsPath, "sessions"), { recursive: true });
 	mkdirSync(resolve(wsPath, ".cursor/rules"), { recursive: true });
 
+	const isNewWorkspace = !existsSync(resolve(wsPath, "SOUL.md"));
 	let copied = 0;
-	for (const f of [...WORKSPACE_FILES, ...WORKSPACE_RULES]) {
+
+	// 首次初始化时复制 BOOTSTRAP.md（仅新工作区）
+	const allFiles = isNewWorkspace
+		? [...WORKSPACE_FILES, "BOOTSTRAP.md", ...WORKSPACE_RULES]
+		: [...WORKSPACE_FILES, ...WORKSPACE_RULES];
+
+	for (const f of allFiles) {
 		const target = resolve(wsPath, f);
 		if (!existsSync(target)) {
 			const src = resolve(TEMPLATE_DIR, f);
@@ -152,8 +159,11 @@ function ensureWorkspace(wsPath: string): void {
 	}
 	if (copied > 0) {
 		console.log(`[工作区] ${wsPath} 初始化完成 (${copied} 个文件)`);
-		console.log("[工作区] 建议编辑 IDENTITY.md 和 USER.md 完成个性化");
+		if (isNewWorkspace) {
+			console.log("[工作区] 首次启动：BOOTSTRAP.md 已就绪，首次对话将触发出生仪式");
+		}
 	}
+	return isNewWorkspace;
 }
 
 // ── 记忆管理器 ───────────────────────────────────
@@ -1963,11 +1973,13 @@ console.log(`
 │  记忆: ${memEngine}
 │  调度: cron-jobs.json (文件监听)
 │  心跳: 默认关闭（飞书 /心跳 开启）
+│  自检: BOOT.md（每次启动执行）
 │
 │  规则（每次会话自动加载）:
 │    soul.mdc, agent-identity.mdc, user-context.mdc
 │    workspace-rules.mdc, tools.mdc, memory-protocol.mdc
-│    scheduler-protocol.mdc, cursor-capabilities.mdc
+│    scheduler-protocol.mdc, heartbeat-protocol.mdc
+│    cursor-capabilities.mdc
 │  记忆索引: 全工作区文本文件（memory-tool.ts）
 │
 │  回复: 互动卡片 + 消息更新
@@ -1987,3 +1999,26 @@ heartbeat.start();
 
 ws.start({ eventDispatcher: dispatcher });
 console.log("飞书长连接已启动，等待消息...");
+
+// ── 启动自检（BOOT.md）─────────────────────────────
+setTimeout(async () => {
+	const bootPath = resolve(defaultWorkspace, "BOOT.md");
+	try {
+		if (!existsSync(bootPath)) return;
+		const content = readFileSync(bootPath, "utf-8").trim();
+		if (!content) return;
+		console.log("[启动] 检测到 BOOT.md，执行启动自检...");
+		const bootPrompt = [
+			"你正在执行启动自检。严格按 BOOT.md 指示操作。",
+			"如果无事可做，不需要回复任何内容。",
+		].join("\n");
+		const { result } = await runAgent(defaultWorkspace, bootPrompt);
+		const trimmed = result.trim();
+		if (trimmed && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveChatId) {
+			await sendCard(lastActiveChatId, trimmed, { title: "🚀 启动自检", color: "wathet" });
+		}
+		console.log("[启动] BOOT.md 自检完成");
+	} catch (e) {
+		console.warn(`[启动] BOOT.md 执行失败: ${e}`);
+	}
+}, 8000);
