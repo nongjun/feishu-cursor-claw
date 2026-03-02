@@ -838,9 +838,9 @@ function loadSessionsFromDisk(): void {
 	try {
 		if (!existsSync(SESSIONS_PATH)) return;
 		const raw = JSON.parse(readFileSync(SESSIONS_PATH, "utf-8"));
+		sessionsStore.clear();
 		for (const [k, v] of Object.entries(raw)) {
 			if (typeof v === "string") {
-				// 向后兼容旧格式（纯 session ID 字符串）
 				sessionsStore.set(k, {
 					active: v,
 					history: [{ id: v, createdAt: Date.now(), lastActiveAt: Date.now(), summary: "(旧会话)" }],
@@ -853,13 +853,25 @@ function loadSessionsFromDisk(): void {
 	} catch {}
 }
 
+let sessionsSaving = false;
+
 function saveSessions(): void {
 	try {
+		sessionsSaving = true;
 		writeFileSync(SESSIONS_PATH, JSON.stringify(Object.fromEntries(sessionsStore), null, 2));
-	} catch {}
+	} catch {} finally {
+		setTimeout(() => { sessionsSaving = false; }, 500);
+	}
 }
 
 loadSessionsFromDisk();
+
+watchFile(SESSIONS_PATH, { interval: 3000 }, () => {
+	if (sessionsSaving) return;
+	try {
+		loadSessionsFromDisk();
+	} catch {}
+});
 
 function getActiveSessionId(workspace: string): string | undefined {
 	return sessionsStore.get(workspace)?.active || undefined;
