@@ -22,7 +22,7 @@ generate_plist() {
 	<array>
 		<string>$BUN_BIN</string>
 		<string>run</string>
-		<string>server.ts</string>
+		<string>$BOT_DIR/start.ts</string>
 	</array>
 
 	<key>WorkingDirectory</key>
@@ -40,18 +40,12 @@ generate_plist() {
 	<true/>
 
 	<key>KeepAlive</key>
-	<dict>
-		<key>SuccessfulExit</key>
-		<false/>
-	</dict>
+	<true/>
 
 	<key>StandardOutPath</key>
 	<string>$LOG_FILE</string>
 	<key>StandardErrorPath</key>
 	<string>$LOG_FILE</string>
-
-	<key>ThrottleInterval</key>
-	<integer>10</integer>
 
 	<key>ProcessType</key>
 	<string>Background</string>
