@@ -905,14 +905,11 @@ function updateSessionSummary(workspace: string, sessionId: string, summary: str
 	}
 }
 
-function generateSessionTitle(prompt: string, result: string): string {
+function generateSessionTitleFallback(prompt: string, result: string): string {
 	const noise = /^(帮我|请你?|麻烦|你好|嗨|hi|hello|hey|ok|好的|嗯|哦)[，,。.！!？?\s]*/gi;
-	let cleaned = prompt.replace(noise, "").trim();
+	const cleaned = prompt.replace(noise, "").trim();
 
-	if (cleaned.length >= 4 && cleaned.length <= 40) {
-		return cleaned;
-	}
-
+	if (cleaned.length >= 4 && cleaned.length <= 40) return cleaned;
 	if (cleaned.length > 40) {
 		const cutoff = cleaned.slice(0, 40);
 		const lastPunct = Math.max(
@@ -922,19 +919,51 @@ function generateSessionTitle(prompt: string, result: string): string {
 		);
 		return (lastPunct > 15 ? cutoff.slice(0, lastPunct) : cutoff) + "…";
 	}
-
-	// prompt 太短/太模糊，从 result 提取
 	const firstLine = result.split("\n").find((l) => {
 		const t = l.replace(/^[#*>\-\s]+/, "").trim();
 		return t.length >= 4 && !t.startsWith("```") && !t.startsWith("HEARTBEAT");
 	});
 	if (firstLine) {
 		const t = firstLine.replace(/^[#*>\-\s]+/, "").replace(/\*\*/g, "").trim();
-		if (t.length <= 40) return t;
-		return t.slice(0, 38) + "…";
+		return t.length <= 40 ? t : t.slice(0, 38) + "…";
 	}
-
 	return cleaned || prompt.slice(0, 30) || "(对话)";
+}
+
+async function generateSessionTitle(workspace: string, sessionId: string, prompt: string, result: string): Promise<void> {
+	const fallback = generateSessionTitleFallback(prompt, result);
+	try {
+		const context = `用户: ${prompt.slice(0, 200)}\n\nAI回复摘要: ${result.slice(0, 500)}`;
+		const titlePrompt = `根据以下对话，生成一个简短的中文标题（4-20个字，不加标点，不加引号，直接输出标题）：\n\n${context}`;
+		const child = spawn(AGENT_BIN, [
+			"-p", "--force", "--trust",
+			"--model", "auto",
+			"--output-format", "text",
+			"--", titlePrompt,
+		], {
+			env: { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+
+		const title = await new Promise<string>((resolve) => {
+			let out = "";
+			const timeout = setTimeout(() => { child.kill(); resolve(fallback); }, 15_000);
+			child.stdout!.on("data", (c: Buffer) => { out += c.toString(); });
+			child.on("close", () => {
+				clearTimeout(timeout);
+				const raw = out.trim().split("\n").pop()?.trim() || "";
+				const clean = raw.replace(/^["'「《]|["'」》]$/g, "").replace(/[。.！!？?]$/, "").trim();
+				resolve(clean.length >= 2 && clean.length <= 30 ? clean : fallback);
+			});
+			child.on("error", () => { clearTimeout(timeout); resolve(fallback); });
+		});
+
+		updateSessionSummary(workspace, sessionId, title);
+		console.log(`[Session] LLM 命名: ${title}`);
+	} catch {
+		updateSessionSummary(workspace, sessionId, fallback);
+		console.log(`[Session] 降级命名: ${fallback}`);
+	}
 }
 
 function archiveAndResetSession(workspace: string): void {
@@ -1261,9 +1290,7 @@ async function runAgent(
 				if (sessionId) {
 					setActiveSession(workspace, sessionId);
 					if (isNewSession) {
-						const title = generateSessionTitle(prompt, result);
-						updateSessionSummary(workspace, sessionId, title);
-						console.log(`[Session] 自动命名: ${title}`);
+						generateSessionTitle(workspace, sessionId, prompt, result);
 					}
 				}
 				return { result };
@@ -1278,9 +1305,8 @@ async function runAgent(
 							onProgress: opts?.onProgress,
 						});
 						if (sessionId) {
-							const title = generateSessionTitle(prompt, result);
-							setActiveSession(workspace, sessionId, title);
-							console.log(`[Session] 自动命名: ${title}`);
+							setActiveSession(workspace, sessionId);
+							generateSessionTitle(workspace, sessionId, prompt, result);
 						}
 						return { result };
 					} catch (retryErr) {
@@ -1300,8 +1326,7 @@ async function runAgent(
 						if (newSid) {
 							setActiveSession(workspace, newSid);
 							if (!fallbackSessionId) {
-								const title = generateSessionTitle(prompt, result);
-								updateSessionSummary(workspace, newSid, title);
+								generateSessionTitle(workspace, newSid, prompt, result);
 							}
 						}
 						return {
