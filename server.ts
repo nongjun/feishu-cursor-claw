@@ -875,6 +875,9 @@ function setActiveSession(workspace: string, sessionId: string, summary?: string
 	const existing = ws.history.find((h) => h.id === sessionId);
 	if (existing) {
 		existing.lastActiveAt = Date.now();
+		if (summary && existing.summary === "(新会话)") {
+			existing.summary = summary;
+		}
 	} else {
 		ws.history.unshift({
 			id: sessionId,
@@ -890,6 +893,48 @@ function setActiveSession(workspace: string, sessionId: string, summary?: string
 
 	ws.active = sessionId;
 	saveSessions();
+}
+
+function updateSessionSummary(workspace: string, sessionId: string, summary: string): void {
+	const ws = sessionsStore.get(workspace);
+	if (!ws) return;
+	const entry = ws.history.find((h) => h.id === sessionId);
+	if (entry) {
+		entry.summary = summary;
+		saveSessions();
+	}
+}
+
+function generateSessionTitle(prompt: string, result: string): string {
+	const noise = /^(帮我|请你?|麻烦|你好|嗨|hi|hello|hey|ok|好的|嗯|哦)[，,。.！!？?\s]*/gi;
+	let cleaned = prompt.replace(noise, "").trim();
+
+	if (cleaned.length >= 4 && cleaned.length <= 40) {
+		return cleaned;
+	}
+
+	if (cleaned.length > 40) {
+		const cutoff = cleaned.slice(0, 40);
+		const lastPunct = Math.max(
+			cutoff.lastIndexOf("，"), cutoff.lastIndexOf("。"),
+			cutoff.lastIndexOf("；"), cutoff.lastIndexOf(","),
+			cutoff.lastIndexOf(" "),
+		);
+		return (lastPunct > 15 ? cutoff.slice(0, lastPunct) : cutoff) + "…";
+	}
+
+	// prompt 太短/太模糊，从 result 提取
+	const firstLine = result.split("\n").find((l) => {
+		const t = l.replace(/^[#*>\-\s]+/, "").trim();
+		return t.length >= 4 && !t.startsWith("```") && !t.startsWith("HEARTBEAT");
+	});
+	if (firstLine) {
+		const t = firstLine.replace(/^[#*>\-\s]+/, "").replace(/\*\*/g, "").trim();
+		if (t.length <= 40) return t;
+		return t.slice(0, 38) + "…";
+	}
+
+	return cleaned || prompt.slice(0, 30) || "(对话)";
 }
 
 function archiveAndResetSession(workspace: string): void {
@@ -1196,12 +1241,9 @@ async function runAgent(
 	opts?: {
 		onProgress?: (p: AgentProgress) => void;
 		onStart?: () => void;
-		sessionSummary?: string;
 	},
 ): Promise<{ result: string; quotaWarning?: string }> {
 	const primaryModel = config.CURSOR_MODEL;
-	const summary = opts?.sessionSummary;
-	// 在消息到达时确定 lockKey，同会话串行，不同会话可并行
 	const lockKey = getLockKey(workspace);
 
 	return withSessionLock(lockKey, async () => {
@@ -1209,13 +1251,21 @@ async function runAgent(
 		opts?.onStart?.();
 		try {
 			const existingSessionId = getActiveSessionId(workspace);
+			const isNewSession = !existingSessionId;
 
 			try {
 				const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, prompt, {
 					sessionId: existingSessionId,
 					onProgress: opts?.onProgress,
 				});
-				if (sessionId) setActiveSession(workspace, sessionId, summary);
+				if (sessionId) {
+					setActiveSession(workspace, sessionId);
+					if (isNewSession) {
+						const title = generateSessionTitle(prompt, result);
+						updateSessionSummary(workspace, sessionId, title);
+						console.log(`[Session] 自动命名: ${title}`);
+					}
+				}
 				return { result };
 			} catch (err) {
 				const e = err instanceof Error ? err : new Error(String(err));
@@ -1223,12 +1273,15 @@ async function runAgent(
 				if (existingSessionId && !isBillingError(e.message)) {
 					console.warn(`[重试] 会话可能过期，重新创建: ${e.message.slice(0, 100)}`);
 					archiveAndResetSession(workspace);
-					// 新会话 → 新 lockKey，但当前 lock 仍有效，用原 lockKey 追踪子进程
 					try {
 						const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, prompt, {
 							onProgress: opts?.onProgress,
 						});
-						if (sessionId) setActiveSession(workspace, sessionId, summary);
+						if (sessionId) {
+							const title = generateSessionTitle(prompt, result);
+							setActiveSession(workspace, sessionId, title);
+							console.log(`[Session] 自动命名: ${title}`);
+						}
 						return { result };
 					} catch (retryErr) {
 						const re = retryErr instanceof Error ? retryErr : new Error(String(retryErr));
@@ -1244,7 +1297,13 @@ async function runAgent(
 							sessionId: fallbackSessionId,
 							onProgress: opts?.onProgress,
 						});
-						if (newSid) setActiveSession(workspace, newSid, summary);
+						if (newSid) {
+							setActiveSession(workspace, newSid);
+							if (!fallbackSessionId) {
+								const title = generateSessionTitle(prompt, result);
+								updateSessionSummary(workspace, newSid, title);
+							}
+						}
 						return {
 							result,
 							quotaWarning: `⚠️ **模型降级通知**\n\n${primaryModel} 欠费，本次已用 auto 完成。\n\n> ${e.message.slice(0, 100)}`,
@@ -1890,7 +1949,7 @@ async function handleInner(
 		: undefined;
 
 	try {
-		const { result, quotaWarning } = await runAgent(workspace, prompt, { onProgress, onStart, sessionSummary: prompt.slice(0, 60) });
+		const { result, quotaWarning } = await runAgent(workspace, prompt, { onProgress, onStart });
 		const usedModel = quotaWarning ? "auto" : model;
 		const elapsed = formatElapsed(Math.round((Date.now() - taskStart) / 1000));
 		console.log(`[${new Date().toISOString()}] 完成 [${label}] model=${usedModel} elapsed=${elapsed} (${result.length} chars)`);
