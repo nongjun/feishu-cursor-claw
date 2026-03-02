@@ -934,7 +934,7 @@ async function generateSessionTitle(workspace: string, sessionId: string, prompt
 	const fallback = generateSessionTitleFallback(prompt, result);
 	try {
 		const context = `用户: ${prompt.slice(0, 200)}\n\nAI回复摘要: ${result.slice(0, 500)}`;
-		const titlePrompt = `根据以下对话，生成一个简短的中文标题（4-20个字，不加标点，不加引号，直接输出标题）：\n\n${context}`;
+		const titlePrompt = `根据以下对话，生成一个简短的中文标题。要求：必须使用中文，4-20个字，不加标点，不加引号，不加书名号，直接输出标题，不要输出任何其它内容。\n\n${context}`;
 		const child = spawn(AGENT_BIN, [
 			"-p", "--force", "--trust",
 			"--model", "auto",
