@@ -18,6 +18,13 @@ dist/
 .cache/
 *.tsbuildinfo
 
+# Python cache
+__pycache__/
+*.pyc
+
+# turix-cua temp files (logs, screenshots, memory)
+.turix_tmp/
+
 # OS files
 .DS_Store
 Thumbs.db

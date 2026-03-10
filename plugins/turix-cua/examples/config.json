@@ -1,0 +1,55 @@
+{
+  "logging_level": "DEBUG",
+  "output_dir": ".turix_tmp",
+  "brain_llm": {
+    "provider": "turix",
+    "model_name": "gemini-3-flash-preview",
+    "api_key": "your_api_key_here",
+    "base_url": "https://turixapi.io/v1" 
+  },
+
+  "actor_llm": {
+    "provider": "turix",
+    "model_name": "turix-actor",
+    "api_key": "your_api_key_here",
+    "base_url": "https://turixapi.io/v1" 
+  },
+
+  "planner_llm": {
+    "provider": "turix",
+    "model_name": "gemini-3-flash-preview",
+    "api_key": "your_api_key_here",
+    "base_url": "https://turixapi.io/v1" 
+  },
+
+  "memory_llm": {
+    "provider": "turix",
+    "model_name": "gemini-3-flash-preview",
+    "api_key": "your_api_key_here",
+    "base_url": "https://turixapi.io/v1" 
+  },
+
+  "agent": {
+    "task": "open Chrome, go to github, and search for turix-cua in the github webpage. Enter the TuriX-CUA repository, and star it.",
+    "memory_budget": 2000,
+    "summary_memory_budget": 8000,
+    "use_ui": false,
+    "use_search": false,
+    "use_skills": true,
+    "skills_dir": "skills",
+    "skills_max_chars": 4000,
+    "use_plan": true,
+    "max_actions_per_step": 5,
+    "max_steps": 100,
+    "force_stop_hotkey": "command+shift+2",
+    "use_turix": true,
+    "resume": false,
+    "agent_id": null,
+    "save_brain_conversation_path": "brain_llm_interactions.log",
+    "save_actor_conversation_path": "actor_llm_interactions.log",
+    "save_planner_conversation_path": "planner_llm_interactions.log",
+    "save_actor_conversation_path_encoding": "utf-8",
+    "save_brain_conversation_path_encoding": "utf-8",
+    "save_planner_conversation_path_encoding": "utf-8"
+  }
+}

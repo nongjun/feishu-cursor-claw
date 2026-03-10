@@ -1,0 +1,9 @@
+---
+description: 
+alwaysApply: true
+---
+
+1、Always respond in Chinese-simplified！
+2、只要合理，就分成多个子 agent 来执行！
+3、子 agent 应全部强制使用 opus4.6 ！
+4、所有的 Chat 要以中文命名！

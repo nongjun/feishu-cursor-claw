@@ -1,0 +1,94 @@
+---
+description: SCRM 系统核心约束与开发规范
+alwaysApply: true
+---
+
+## 服务器与部署约束
+
+- 公网IP：120.79.242.43，泛域名：*.ireborn.com.cn
+- 国内服务器，开发测试环境，不可在容器外部署服务
+- 前后端分离部署在独立Docker容器中，Docker Compose管理
+- 仅Nginx层配置SSL（certbot申请），后端端口仅绑定127.0.0.1
+- 开发模式启用HMR热重载，生产模式Nginx静态托管+多进程
+
+## 镜像源
+
+- 阿里镜像站：https://developer.aliyun.com/mirror
+- apt源：http://mirrors.aliyun.com/debian/
+- Docker镜像：https://kjphlxn2.mirror.aliyuncs.com（用具体版本号，禁止latest）
+- 备用：https://docker.m.daocloud.io / https://docker.xuanyuan.me
+
+## 共享模块导入
+
+- 后端：`from shared_backend.xxx import yyy`，依赖挂载 + `PYTHONPATH=/app`，**禁止** `sys.path.insert`
+- 前端：`import { xxx } from '@shared/utils/auth'`，别名 `@shared` → `../../公共模块/shared_frontend` 或 `/app/shared_frontend`
+
+## AI 调用
+
+- **必须**通过 `shared_backend.services.ai_service.AIService`，**禁止**直接调 API 或硬编码 Key
+- 配置从门户 `/api/ai/internal/config` 获取，前端用 `@shared/components/ModelSelector.vue`
+
+## 后端统一格式
+
+- 响应：`success_response()` / `error_response()`（from `shared_backend.middleware.response`），禁止自定义 JSONResponse
+- 必须配置：`setup_cors(app)` + `setup_exception_handlers(app)` + `setup_request_logging(app)`
+
+## 容器间通信
+
+- 用**容器名+内部端口**（`portal-backend:8000`），禁止用宿主机端口互调
+- 所有容器加入 `scrm_network`（external），宿主机端口仅供 Nginx 反代
+
+## Docker 构建
+
+- 不设 `deploy.resources.limits`，用 `oom_score_adj` 分层（MySQL -500、门户 -200、业务 -100）
+- 后端先装 `requirements-base.txt`（共享），再装模块 `requirements.txt`
+- 前端共享模块构建用 `COPY --from=shared_frontend`
+
+## 企微 Token
+
+- **所有模块**通过 `PORTAL_API_URL`（`http://portal-backend:8000`）获取，禁止自行请求企微 API
+- Token 缓存在 `portal-redis`，门户统一续期
+
+## 数据库
+
+- 统一 MySQL `scrm_content`，容器内连 `scrm-mysql:3306`，字符集 `utf8mb4_unicode_ci`，时区 `Asia/Shanghai`
+- ORM 用 `shared_backend.database` 的 `Base`、`get_db`
+- 共用表（employees、departments、external_contacts、chat_messages）由负责模块维护，其他模块只读
+
+## Nginx 分层
+
+- 宿主机：SSL + 域名路由 + 反代 + 限流（api 30r/s、login 5r/m）；用 `resolver 127.0.0.11` 避免 502
+- 容器内：静态托管 + SPA try_files + `/health`，**不配 SSL**
+
+## 前端技术栈
+
+- `pnpm@9.15.0+`（禁止 npm/yarn），Vue 3 + Element Plus + Vite 5 + Tailwind CSS
+- 时间用 dayjs（禁止 moment），格式化统一用 `@shared/utils/format`
+
+## 环境变量
+
+- 根目录 `.env` 共享，各模块 `env_file: ../.env` 引用
+- 敏感配置存 `system_configs` 表 AES 加密，唯一密钥 `CONFIG_ENCRYPT_KEY`
+- `TZ=Asia/Shanghai` 必配，禁止代码中硬编码密码/Key/Token
+
+## 前端认证
+
+- Token/路由守卫/HTTP 请求统一用 `@shared/utils/` 下的 auth、router-guard、request
+- 401 统一跳转门户登录页，禁止各模块自行实现认证逻辑
+
+## 知识库（唯一真相源）
+
+项目详细信息已结构化管理，请按需查阅：
+- **[/root/瑞小美AiOS/AGENTS.md]** — AI 编码入口（技术栈、知识库索引、编码规范、模块结构）
+- **[/root/瑞小美AiOS/架构.md]** — 系统鸟瞰图（16个子系统、36个容器、依赖关系、部署拓扑）
+- **[/root/瑞小美AiOS/文档/]** — 结构化知识库目录：
+  - `文档/凭据与配置/` — 全部Token/密码/API Key（开发环境明文）
+  - `文档/核心信念/` — 团队基线、技术栈标准、OAuth/AI接入规范
+  - `文档/设计文档/` — 功能设计方案（均标注验证状态）
+  - `文档/参考资料/` — API文档、数据库Schema、联调指南、网络域名
+  - `文档/质量评分/` — 各模块成熟度与改动风险
+  - `文档/执行计划/` — 进行中任务与技术债务
+  - `文档/变更日志/` — 重大变更记录
+  - `文档/产品规格/` — 业务需求与产品定义
+
+信息矛盾时，以 `文档/` 目录内容为准。

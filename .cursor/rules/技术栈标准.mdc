@@ -1,0 +1,90 @@
+---
+description: 瑞小美系统技术栈标准与部署规范——涉及技术选型、容器、部署、数据库时加载
+alwaysApply: false
+globs:
+  - "**/docker-compose*"
+  - "**/Dockerfile*"
+  - "**/nginx*"
+  - "**/.env*"
+  - "**/requirements*.txt"
+  - "**/package.json"
+  - "**/vite.config*"
+---
+
+# 瑞小美系统技术栈标准与字符标准
+
+## 技术栈
+
+### 后端
+
+| 技术 | 版本/说明 |
+| --- | --- |
+| **语言** | Python 3.11 |
+| **框架** | FastAPI |
+| **ORM** | SQLAlchemy |
+| **数据库** | MySQL 8.0 |
+| **认证** | OAuth |
+
+### 前端
+
+| 类别 | 首选技术 | 说明 |
+| --- | --- | --- |
+| **语言** | TypeScript | 类型安全 |
+| **框架** | Vue 3 | 统一前端框架 |
+| **构建工具** | Vite | 快速开发 |
+| **包管理器** | npm | 生态成熟 |
+| **UI组件库** | Element Plus / Ant Design Vue | 企业级UI |
+| **CSS方案** | Tailwind CSS | 可与组件库共存 |
+| **HTTP客户端** | Axios | 统一请求库 |
+| **状态管理** | Pinia | 按需使用 |
+
+### 前端（特殊场景可选）
+
+| 技术 | 适用场景 |
+| --- | --- |
+| **Uni-app** | 小程序/跨平台开发 |
+| **qiankun** | 微前端架构整合 |
+| **React/Next.js** | 仅用于遗留系统维护 |
+
+### 基础设施
+
+| 技术 | 说明 |
+| --- | --- |
+| **容器化** | Docker + Docker Compose |
+| **反向代理** | Nginx（独立 Docker 容器） |
+| **网络** | Docker Bridge Network |
+| **SSL** | Let's Encrypt (Certbot) |
+
+## 部署规范
+
+| 规范 | 说明 |
+| --- | --- |
+| 容器化部署 | 所有服务必须在 Docker 容器中 |
+| 前后端分离 | 前后端独立容器、独立部署 |
+| Docker Compose | 管理多服务与依赖 |
+| Nginx 统一入口 | 后端不直接暴露公网 |
+| 热重载 | 开发环境必须启用 HMR |
+| 禁用 latest | 镜像必须指定具体版本号 |
+| 健康检查 | 所有容器必须配置，后端提供 /health 端点 |
+| 日志轮转 | json-file 驱动，max-size 10m |
+| 容器间通信 | 用容器名，禁止硬编码 IP |
+| Nginx DNS | 用 resolver 127.0.0.11 + 变量 proxy_pass 避免 502 |
+| 敏感信息 | .env 管理，禁止硬编码，权限 600 |
+
+## 镜像源
+
+| 类型 | 首选 |
+| --- | --- |
+| Docker Registry | `https://kjphlxn2.mirror.aliyuncs.com` |
+| APT 源 | `http://mirrors.aliyun.com/debian/` |
+
+## 字符标准
+
+| 项目 | 标准 |
+| --- | --- |
+| 字符编码 | UTF-8 |
+| 数据库字符集 | utf8mb4 |
+| 排序规则 | utf8mb4_unicode_ci |
+| API 响应 | JSON (UTF-8) |
+| 日期格式 | ISO 8601 |
+| 时区 | Asia/Shanghai (UTC+8) |

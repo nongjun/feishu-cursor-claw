@@ -1,0 +1,44 @@
+---
+description: 禁止在前端代码中硬编码门户域名，必须使用 shared 常量
+alwaysApply: true
+---
+
+## 禁止硬编码门户 URL
+
+**绝对禁止**在 Vue/JS/TS 文件中硬编码 `scrm.ireborn.com.cn` 或任何 `*.ireborn.com.cn` 域名作为门户跳转地址。
+
+### 正确做法
+
+从 `@shared/utils/auth` 或本模块的 `@/utils/auth` 导入常量：
+
+```js
+import { PORTAL_URL, PORTAL_LOGIN_URL } from '@shared/utils/auth'
+
+// 返回门户
+window.location.href = PORTAL_URL
+
+// 跳转登录
+window.location.href = PORTAL_LOGIN_URL
+```
+
+### 不允许的写法
+
+```js
+// ❌ 硬编码域名
+window.location.href = 'https://scrm.ireborn.com.cn/'
+window.location.href = 'https://scrm.ireborn.com.cn/login'
+const portalUrl = 'https://scrm.ireborn.com.cn'
+```
+
+### 例外场景
+
+以下场景暂允许（属于 Level 2/3 治理范围）：
+- `vite.config.*` 中的 HMR host 配置
+- 侧边栏 OAuth 回调 URL（需与企微后台白名单一致）
+- `portalApiBase` 的 fallback 值（计划统一改用 `@shared/api/portal.js`）
+
+### 常量来源
+
+- `PORTAL_URL`：`(window.__SCRM_PORTAL_URL__ || 'https://scrm.ireborn.com.cn').replace(/\/+$/, '')`
+- `PORTAL_LOGIN_URL`：`PORTAL_URL + '/login'`
+- 定义位置：`公共模块/shared_frontend/utils/auth.js`
