@@ -56,8 +56,8 @@ https://4sapi.com/v1/chat/completions
 
 | Key 类型 | Key | 说明 |
 |---------|-----|------|
-| **通用 Key** | `***REMOVED-4SAPI-KEY***` | 支持几乎所有模型（Gemini/DeepSeek 等），**不支持 Claude** |
-| **Claude 专用 Key** | `***REMOVED-4SAPI-KEY***` | 仅用于 Claude 模型调用 |
+| **通用 Key** | `${TEST_UNIVERSAL_KEY}  # 已轮换，原 key 在 git history 已被 filter-repo 清除` | 支持几乎所有模型（Gemini/DeepSeek 等），**不支持 Claude** |
+| **Claude 专用 Key** | `${TEST_CLAUDE_KEY}  # 已轮换，原 key 在 git history 已被 filter-repo 清除` | 仅用于 Claude 模型调用 |
 
 > ⚠️ **注意**：
 > - 测试 Key 仅用于开发调试，正式环境 Key 在门户后台配置

@@ -4,25 +4,25 @@
   "brain_llm": {
     "provider": "anthropic",
     "model_name": "claude-opus-4-6",
-    "api_key": "***REMOVED-4SAPI-KEY***",
+    "api_key": "${TURIX_API_KEY}",
     "base_url": "https://4sapi.com"
   },
   "actor_llm": {
     "provider": "anthropic",
     "model_name": "claude-opus-4-6",
-    "api_key": "***REMOVED-4SAPI-KEY***",
+    "api_key": "${TURIX_API_KEY}",
     "base_url": "https://4sapi.com"
   },
   "planner_llm": {
     "provider": "anthropic",
     "model_name": "claude-opus-4-6",
-    "api_key": "***REMOVED-4SAPI-KEY***",
+    "api_key": "${TURIX_API_KEY}",
     "base_url": "https://4sapi.com"
   },
   "memory_llm": {
     "provider": "anthropic",
     "model_name": "claude-opus-4-6",
-    "api_key": "***REMOVED-4SAPI-KEY***",
+    "api_key": "${TURIX_API_KEY}",
     "base_url": "https://4sapi.com"
   },
   "agent": {

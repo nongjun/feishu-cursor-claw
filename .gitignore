@@ -46,3 +46,22 @@ bun.lock
 .memory.sqlite-shm
 .cursor/memory/
 .cursor/sessions/
+
+
+# === SECURITY: AI agent transcripts & sessions often leak credentials (added 2026-04-19) ===
+.cursor/projects/
+**/agent-transcripts/
+**/.cursor/scripts/sessions/
+.cursor/scripts/logs/
+.last-chat-id
+
+# === SECURITY: credential-like files ===
+**/credentials*
+**/*.credentials.json
+**/secrets.json
+**/*.pem
+**/*.key
+**/id_rsa*
+.env*
+!.env.example
+!.env.template
