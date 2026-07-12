@@ -83,7 +83,7 @@ https://openrouter.ai/api/v1/chat/completions
 
 **测试阶段 Key**（仅限开发环境）：
 ```
-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
+${OPENROUTER_API_KEY}  # 已轮换，从密钥库获取
 ```
 
 **官方文档**：[Images](https://openrouter.ai/docs/guides/overview/multimodal/images) | [PDFs](https://openrouter.ai/docs/guides/overview/multimodal/pdfs) | [Audio](https://openrouter.ai/docs/guides/overview/multimodal/audio) | [Videos](https://openrouter.ai/docs/guides/overview/multimodal/videos)
